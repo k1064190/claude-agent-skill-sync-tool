@@ -611,32 +611,11 @@ tui_tree_select() {
         return 0
     }
 
-    local _done=0
     while true; do
         local _k; _k=$(_tui_tree_key)
         if ! _tui_tree_process_key "$_k"; then
             break
         fi
-
-        # Drain any buffered keypresses before redrawing. When a key is held
-        # down the terminal queues multiple events; consuming them all here
-        # means we redraw once per visual frame instead of once per keypress,
-        # eliminating the jitter caused by rapid clear-and-repaint cycles.
-        # Use a short non-zero timeout: bash's -t 0 only checks availability
-        # without consuming bytes, so it would loop infinitely on buffered input.
-        local _k2 _seq2
-        while IFS= read -rsn1 -t 0.05 _k2 <"$_tty" 2>/dev/null; do
-            if [[ "$_k2" == $'\033' ]]; then
-                IFS= read -rsn2 -t 0.05 _seq2 <"$_tty" 2>/dev/null || true
-                _k2="${_k2}${_seq2}"
-            fi
-            if ! _tui_tree_process_key "$_k2"; then
-                _done=1
-                break
-            fi
-        done
-        (( _done )) && break
-
         _tui_tree_draw
     done
 
