@@ -418,98 +418,112 @@ tui_tree_select() {
     }
 
     # Draw the preview panel (_prev_height lines)
-    # _tui_tree_draw_preview writes to stdout (caller must redirect to _tty)
-    _tui_tree_draw_preview() {
-        [[ $_prev_height -eq 0 ]] && return
-
-        if (( _preview )); then
-            local _preview_text=""
-            if [[ "${_disp_type[$_cur]}" == "dir" ]]; then
-                local -a _pdescs=()
-                mapfile -t _pdescs < <(_tui_tree_leaf_descendants "$_cur")
-                _preview_text="${#_pdescs[@]} items in ${_disp_label[$_cur]}"
-            elif [[ -n "$_desc_fn" ]]; then
-                _preview_text=$("$_desc_fn" "${_disp_orig[$_cur]}" 2>/dev/null)
-                [[ -z "$_preview_text" ]] && _preview_text="(no description)"
-            fi
-            local _pw=$(( _cols - 3 ))
-            printf "${CL}${BD}${CYN}─── description ─${R}\n"
-            local -a _wlines=()
-            while IFS= read -r _wl; do _wlines+=("$_wl"); done < <(_tui_fold "$_preview_text" "$_pw")
-            local _wi
-            for (( _wi=0; _wi<3; _wi++ )); do
-                if (( _wi < ${#_wlines[@]} )); then
-                    printf "${CL} %s\n" "${_wlines[$_wi]}"
-                else
-                    printf "${CL}\n"
-                fi
-            done
-            printf "${CL}\n"
-        else
-            printf "${CL}  ${DIM}→ right arrow to preview description${R}\n"
-            local _pi
-            for (( _pi=1; _pi<_prev_height; _pi++ )); do printf "${CL}\n"; done
-        fi
-    }
-
     # Full redraw of the tree TUI (single O(n) pass over display slots).
-    # All output is written in one grouped redirect to avoid partial renders.
+    # Builds the entire frame into a string, then writes it with one printf
+    # call to minimise partial-render flicker between terminal write()s.
     _tui_tree_draw() {
-        {
-            printf '\033[%dA' "$_total"
+        local _buf="" _line _cnt
+        _cnt=$(_tui_tree_cnt)
 
-            local _hint=""
-            [[ -n "$_desc_fn" ]] && _hint="  →=preview"
-            printf "${CL}${BD}${CYN} [%d/%d]  ↑↓=navigate  Space=toggle  a=all  n=none  Enter=confirm  q=cancel%s${R}\n" \
-                "$(_tui_tree_cnt)" "$_leaf_n" "$_hint"
+        # Cursor up to top of reserved TUI block
+        printf -v _line '\033[%dA' "$_total"
+        _buf="$_line"
 
-            if (( _scr > 0 )); then
-                printf "${CL}  ${YLW}↑ %d more above${R}\n" "$_scr"
+        # Header
+        local _hint=""
+        [[ -n "$_desc_fn" ]] && _hint="  →=preview"
+        printf -v _line "${CL}${BD}${CYN} [%d/%d]  ↑↓=navigate  Space=toggle  a=all  n=none  Enter=confirm  q=cancel%s${R}\n" \
+            "$_cnt" "$_leaf_n" "$_hint"
+        _buf+="$_line"
+
+        # Scroll-up indicator
+        if (( _scr > 0 )); then
+            printf -v _line "${CL}  ${YLW}↑ %d more above${R}\n" "$_scr"
+            _buf+="$_line"
+        else
+            _buf+="${CL}"$'\n'
+        fi
+
+        # Visible items
+        local _end=$(( _scr + _vis ))
+        (( _end > _n )) && _end=$_n
+
+        local _i _mark _c _istr _ii _lw
+        for (( _i=_scr; _i<_end; _i++ )); do
+            _mark="" _c="" _istr=""
+            for (( _ii=0; _ii<_disp_indent[_i]; _ii++ )); do _istr+="  "; done
+
+            if [[ "${_disp_type[$_i]}" == "dir" ]]; then
+                _tui_tree_dir_state "$_i"
+                case "$_tts_state" in
+                    checked)  _mark="[x]"; _c="$GRN" ;;
+                    partial)  _mark="[~]"; _c="$YLW" ;;
+                    *)        _mark="[ ]"; _c="" ;;
+                esac
             else
-                printf "${CL}\n"
+                if (( _sel[_i] )); then _mark="[x]"; _c="$GRN"; else _mark="[ ]"; _c=""; fi
             fi
 
-            local _end=$(( _scr + _vis ))
-            (( _end > _n )) && _end=$_n
-
-            local _i
-            for (( _i=_scr; _i<_end; _i++ )); do
-                local _mark _c="" _istr=""
-                local _ii
-                for (( _ii=0; _ii<_disp_indent[_i]; _ii++ )); do _istr+="  "; done
-
-                if [[ "${_disp_type[$_i]}" == "dir" ]]; then
-                    _tui_tree_dir_state "$_i"
-                    case "$_tts_state" in
-                        checked)  _mark="[x]"; _c="$GRN" ;;
-                        partial)  _mark="[~]"; _c="$YLW" ;;
-                        *)        _mark="[ ]"; _c="" ;;
-                    esac
-                else
-                    if (( _sel[_i] )); then _mark="[x]"; _c="$GRN"; else _mark="[ ]"; _c=""; fi
-                fi
-
-                local _lw=$(( _cols - 8 - ${#_istr} ))
-                (( _lw < 1 )) && _lw=1
-                if (( _i == _cur )); then
-                    printf "${CL}${REV} ▶ %s%s %-${_lw}s ${R}\n" \
-                        "$_istr" "$_mark" "${_disp_label[$_i]}"
-                else
-                    printf "${CL}   ${_c}%s%s${R} %s\n" \
-                        "$_istr" "$_mark" "${_disp_label[$_i]}"
-                fi
-            done
-
-            for (( _i=_end; _i<_scr+_vis; _i++ )); do printf "${CL}\n"; done
-
-            if (( _scr + _vis < _n )); then
-                printf "${CL}  ${YLW}↓ %d more below${R}\n" "$(( _n - _scr - _vis ))"
+            _lw=$(( _cols - 8 - ${#_istr} ))
+            (( _lw < 1 )) && _lw=1
+            if (( _i == _cur )); then
+                printf -v _line "${CL}${REV} ▶ %s%s %-${_lw}s ${R}\n" \
+                    "$_istr" "$_mark" "${_disp_label[$_i]}"
             else
-                printf "${CL}\n"
+                printf -v _line "${CL}   ${_c}%s%s${R} %s\n" \
+                    "$_istr" "$_mark" "${_disp_label[$_i]}"
             fi
+            _buf+="$_line"
+        done
 
-            _tui_tree_draw_preview
-        } >"$_tty"
+        # Pad any remaining visible rows
+        for (( _i=_end; _i<_scr+_vis; _i++ )); do _buf+="${CL}"$'\n'; done
+
+        # Scroll-down indicator
+        if (( _scr + _vis < _n )); then
+            printf -v _line "${CL}  ${YLW}↓ %d more below${R}\n" "$(( _n - _scr - _vis ))"
+            _buf+="$_line"
+        else
+            _buf+="${CL}"$'\n'
+        fi
+
+        # Preview panel (inlined; appends to _buf)
+        if (( _prev_height > 0 )); then
+            if (( _preview )); then
+                local _preview_text=""
+                if [[ "${_disp_type[$_cur]}" == "dir" ]]; then
+                    local -a _pdescs=()
+                    mapfile -t _pdescs < <(_tui_tree_leaf_descendants "$_cur")
+                    _preview_text="${#_pdescs[@]} items in ${_disp_label[$_cur]}"
+                elif [[ -n "$_desc_fn" ]]; then
+                    _preview_text=$("$_desc_fn" "${_disp_orig[$_cur]}" 2>/dev/null)
+                    [[ -z "$_preview_text" ]] && _preview_text="(no description)"
+                fi
+                local _pw=$(( _cols - 3 ))
+                printf -v _line "${CL}${BD}${CYN}─── description ─${R}\n"
+                _buf+="$_line"
+                local -a _wlines=()
+                while IFS= read -r _wl; do _wlines+=("$_wl"); done < <(_tui_fold "$_preview_text" "$_pw")
+                local _wi
+                for (( _wi=0; _wi<3; _wi++ )); do
+                    if (( _wi < ${#_wlines[@]} )); then
+                        printf -v _line "${CL} %s\n" "${_wlines[$_wi]}"
+                        _buf+="$_line"
+                    else
+                        _buf+="${CL}"$'\n'
+                    fi
+                done
+                _buf+="${CL}"$'\n'
+            else
+                printf -v _line "${CL}  ${DIM}→ right arrow to preview description${R}\n"
+                _buf+="$_line"
+                local _pi
+                for (( _pi=1; _pi<_prev_height; _pi++ )); do _buf+="${CL}"$'\n'; done
+            fi
+        fi
+
+        # Single write — terminal receives the whole frame at once
+        printf '%s' "$_buf" >"$_tty"
     }
 
     # Read one keypress, handling escape sequences for arrow keys
@@ -608,8 +622,10 @@ tui_tree_select() {
         # down the terminal queues multiple events; consuming them all here
         # means we redraw once per visual frame instead of once per keypress,
         # eliminating the jitter caused by rapid clear-and-repaint cycles.
+        # Use a short non-zero timeout: bash's -t 0 only checks availability
+        # without consuming bytes, so it would loop infinitely on buffered input.
         local _k2 _seq2
-        while IFS= read -rsn1 -t 0 _k2 <"$_tty" 2>/dev/null; do
+        while IFS= read -rsn1 -t 0.05 _k2 <"$_tty" 2>/dev/null; do
             if [[ "$_k2" == $'\033' ]]; then
                 IFS= read -rsn2 -t 0.05 _seq2 <"$_tty" 2>/dev/null || true
                 _k2="${_k2}${_seq2}"
