@@ -418,6 +418,7 @@ tui_tree_select() {
     }
 
     # Draw the preview panel (_prev_height lines)
+    # _tui_tree_draw_preview writes to stdout (caller must redirect to _tty)
     _tui_tree_draw_preview() {
         [[ $_prev_height -eq 0 ]] && return
 
@@ -432,80 +433,83 @@ tui_tree_select() {
                 [[ -z "$_preview_text" ]] && _preview_text="(no description)"
             fi
             local _pw=$(( _cols - 3 ))
-            printf "${CL}${BD}${CYN}─── description ─${R}\n" >"$_tty"
+            printf "${CL}${BD}${CYN}─── description ─${R}\n"
             local -a _wlines=()
             while IFS= read -r _wl; do _wlines+=("$_wl"); done < <(_tui_fold "$_preview_text" "$_pw")
             local _wi
             for (( _wi=0; _wi<3; _wi++ )); do
                 if (( _wi < ${#_wlines[@]} )); then
-                    printf "${CL} %s\n" "${_wlines[$_wi]}" >"$_tty"
+                    printf "${CL} %s\n" "${_wlines[$_wi]}"
                 else
-                    printf "${CL}\n" >"$_tty"
+                    printf "${CL}\n"
                 fi
             done
-            printf "${CL}\n" >"$_tty"
+            printf "${CL}\n"
         else
-            printf "${CL}  ${DIM}→ right arrow to preview description${R}\n" >"$_tty"
+            printf "${CL}  ${DIM}→ right arrow to preview description${R}\n"
             local _pi
-            for (( _pi=1; _pi<_prev_height; _pi++ )); do printf "${CL}\n" >"$_tty"; done
+            for (( _pi=1; _pi<_prev_height; _pi++ )); do printf "${CL}\n"; done
         fi
     }
 
-    # Full redraw of the tree TUI (single O(n) pass over display slots)
+    # Full redraw of the tree TUI (single O(n) pass over display slots).
+    # All output is written in one grouped redirect to avoid partial renders.
     _tui_tree_draw() {
-        printf '\033[%dA' "$_total" >"$_tty"
+        {
+            printf '\033[%dA' "$_total"
 
-        local _hint=""
-        [[ -n "$_desc_fn" ]] && _hint="  →=preview"
-        printf "${CL}${BD}${CYN} [%d/%d]  ↑↓=navigate  Space=toggle  a=all  n=none  Enter=confirm  q=cancel%s${R}\n" \
-            "$(_tui_tree_cnt)" "$_leaf_n" "$_hint" >"$_tty"
+            local _hint=""
+            [[ -n "$_desc_fn" ]] && _hint="  →=preview"
+            printf "${CL}${BD}${CYN} [%d/%d]  ↑↓=navigate  Space=toggle  a=all  n=none  Enter=confirm  q=cancel%s${R}\n" \
+                "$(_tui_tree_cnt)" "$_leaf_n" "$_hint"
 
-        if (( _scr > 0 )); then
-            printf "${CL}  ${YLW}↑ %d more above${R}\n" "$_scr" >"$_tty"
-        else
-            printf "${CL}\n" >"$_tty"
-        fi
-
-        local _end=$(( _scr + _vis ))
-        (( _end > _n )) && _end=$_n
-
-        local _i
-        for (( _i=_scr; _i<_end; _i++ )); do
-            local _mark _c="" _istr=""
-            local _ii
-            for (( _ii=0; _ii<_disp_indent[_i]; _ii++ )); do _istr+="  "; done
-
-            if [[ "${_disp_type[$_i]}" == "dir" ]]; then
-                _tui_tree_dir_state "$_i"
-                case "$_tts_state" in
-                    checked)  _mark="[x]"; _c="$GRN" ;;
-                    partial)  _mark="[~]"; _c="$YLW" ;;
-                    *)        _mark="[ ]"; _c="" ;;
-                esac
+            if (( _scr > 0 )); then
+                printf "${CL}  ${YLW}↑ %d more above${R}\n" "$_scr"
             else
-                if (( _sel[_i] )); then _mark="[x]"; _c="$GRN"; else _mark="[ ]"; _c=""; fi
+                printf "${CL}\n"
             fi
 
-            local _lw=$(( _cols - 8 - ${#_istr} ))
-            (( _lw < 1 )) && _lw=1
-            if (( _i == _cur )); then
-                printf "${CL}${REV} ▶ %s%s %-${_lw}s ${R}\n" \
-                    "$_istr" "$_mark" "${_disp_label[$_i]}" >"$_tty"
+            local _end=$(( _scr + _vis ))
+            (( _end > _n )) && _end=$_n
+
+            local _i
+            for (( _i=_scr; _i<_end; _i++ )); do
+                local _mark _c="" _istr=""
+                local _ii
+                for (( _ii=0; _ii<_disp_indent[_i]; _ii++ )); do _istr+="  "; done
+
+                if [[ "${_disp_type[$_i]}" == "dir" ]]; then
+                    _tui_tree_dir_state "$_i"
+                    case "$_tts_state" in
+                        checked)  _mark="[x]"; _c="$GRN" ;;
+                        partial)  _mark="[~]"; _c="$YLW" ;;
+                        *)        _mark="[ ]"; _c="" ;;
+                    esac
+                else
+                    if (( _sel[_i] )); then _mark="[x]"; _c="$GRN"; else _mark="[ ]"; _c=""; fi
+                fi
+
+                local _lw=$(( _cols - 8 - ${#_istr} ))
+                (( _lw < 1 )) && _lw=1
+                if (( _i == _cur )); then
+                    printf "${CL}${REV} ▶ %s%s %-${_lw}s ${R}\n" \
+                        "$_istr" "$_mark" "${_disp_label[$_i]}"
+                else
+                    printf "${CL}   ${_c}%s%s${R} %s\n" \
+                        "$_istr" "$_mark" "${_disp_label[$_i]}"
+                fi
+            done
+
+            for (( _i=_end; _i<_scr+_vis; _i++ )); do printf "${CL}\n"; done
+
+            if (( _scr + _vis < _n )); then
+                printf "${CL}  ${YLW}↓ %d more below${R}\n" "$(( _n - _scr - _vis ))"
             else
-                printf "${CL}   ${_c}%s%s${R} %s\n" \
-                    "$_istr" "$_mark" "${_disp_label[$_i]}" >"$_tty"
+                printf "${CL}\n"
             fi
-        done
 
-        for (( _i=_end; _i<_scr+_vis; _i++ )); do printf "${CL}\n" >"$_tty"; done
-
-        if (( _scr + _vis < _n )); then
-            printf "${CL}  ${YLW}↓ %d more below${R}\n" "$(( _n - _scr - _vis ))" >"$_tty"
-        else
-            printf "${CL}\n" >"$_tty"
-        fi
-
-        _tui_tree_draw_preview
+            _tui_tree_draw_preview
+        } >"$_tty"
     }
 
     # Read one keypress, handling escape sequences for arrow keys
@@ -534,9 +538,12 @@ tui_tree_select() {
     for (( _i=0; _i<_total; _i++ )); do printf '\n' >"$_tty"; done
     _tui_tree_draw
 
-    while true; do
-        local _k; _k=$(_tui_tree_key)
-        case "$_k" in
+    # _tui_tree_process_key - Apply one keypress to TUI state
+    # Args:
+    #   $1 (str): Key identifier string from _tui_tree_key
+    # Returns: 0 to continue loop, 1 to exit loop (Enter or q)
+    _tui_tree_process_key() {
+        case "$1" in
             $'\033[A'|k)  # up arrow
                 if (( _cur > 0 )); then
                     _cur=$(( _cur - 1 ))
@@ -584,9 +591,36 @@ tui_tree_select() {
                 done
                 _tui_tree_invalidate_cache
                 ;;
-            ''|$'\n')  _ok=1; break ;;
-            q|Q)  break ;;
+            ''|$'\n')  _ok=1; return 1 ;;
+            q|Q)  return 1 ;;
         esac
+        return 0
+    }
+
+    local _done=0
+    while true; do
+        local _k; _k=$(_tui_tree_key)
+        if ! _tui_tree_process_key "$_k"; then
+            break
+        fi
+
+        # Drain any buffered keypresses before redrawing. When a key is held
+        # down the terminal queues multiple events; consuming them all here
+        # means we redraw once per visual frame instead of once per keypress,
+        # eliminating the jitter caused by rapid clear-and-repaint cycles.
+        local _k2 _seq2
+        while IFS= read -rsn1 -t 0 _k2 <"$_tty" 2>/dev/null; do
+            if [[ "$_k2" == $'\033' ]]; then
+                IFS= read -rsn2 -t 0.05 _seq2 <"$_tty" 2>/dev/null || true
+                _k2="${_k2}${_seq2}"
+            fi
+            if ! _tui_tree_process_key "$_k2"; then
+                _done=1
+                break
+            fi
+        done
+        (( _done )) && break
+
         _tui_tree_draw
     done
 
