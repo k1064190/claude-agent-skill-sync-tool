@@ -388,9 +388,6 @@ tui_tree_select() {
         for (( _i=0; _i<_n; _i++ )); do _dir_state_cache[$_i]=""; done
     }
 
-    _tui_tree_build
-    [[ $_n -eq 0 ]] && return 1
-
     # Terminal dimensions
     local _rows _cols
     _rows=$(tput lines 2>/dev/null || echo 24)
