@@ -1,0 +1,3 @@
+# compiled binaries (/ prefix = root of go/ dir only, not cmd/ subdirs)
+/sync-agents
+/sync-skills
