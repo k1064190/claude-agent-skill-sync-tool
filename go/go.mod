@@ -5,10 +5,7 @@ module github.com/k1064190/claude-agent-skill-sync-tool/go
 
 go 1.21
 
-require (
-	github.com/charmbracelet/bubbletea v0.27.0
-	golang.org/x/term v0.24.0
-)
+require github.com/charmbracelet/bubbletea v0.27.0
 
 require (
 	github.com/charmbracelet/x/ansi v0.1.4 // indirect

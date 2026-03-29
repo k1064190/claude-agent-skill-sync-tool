@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"golang.org/x/term"
 )
 
 // DescFunc is the signature for a callback that returns a human-readable
@@ -56,8 +55,9 @@ type Model struct {
 }
 
 // NewModel constructs a Model from a sorted item list and an optional
-// description callback. All leaves start pre-selected. The terminal
-// dimensions are queried once at construction time.
+// description callback. All leaves start pre-selected. Terminal dimensions
+// start at conservative defaults; bubbletea sends a WindowSizeMsg almost
+// immediately and the model updates before the first meaningful render.
 //
 // Args:
 //
@@ -69,21 +69,12 @@ type Model struct {
 //	m (Model): Initialised Model ready for use with bubbletea.
 func NewModel(items []string, descFn DescFunc) Model {
 	nodes, leafCount := BuildNodes(items)
-
-	width, height, err := term.GetSize(1) // stdout fd
-	if err != nil || width < 20 {
-		width = 80
-	}
-	if err != nil || height < 6 {
-		height = 24
-	}
-
 	return Model{
 		nodes:       nodes,
 		leafCount:   leafCount,
 		descFn:      descFn,
-		termWidth:   width,
-		termHeight:  height,
+		termWidth:   80,
+		termHeight:  24,
 		cursor:      0,
 		scrollTop:   0,
 		previewOpen: false,

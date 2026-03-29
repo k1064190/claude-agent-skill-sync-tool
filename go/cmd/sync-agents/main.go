@@ -125,7 +125,7 @@ func main() {
 	}
 
 	m := tree.NewModel(allAgents, descFn)
-	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
+	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	finalModel, err := p.Run()
 	if err != nil {
