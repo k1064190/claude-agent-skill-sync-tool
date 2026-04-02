@@ -366,7 +366,7 @@ func (m Model) View() string {
 	// is always "different", forcing a full repaint each frame.
 	// Repeating \033[0m (SGR reset) N times is visually invisible but
 	// produces a unique string per state.
-	tag := strings.Repeat("\033[0m", (m.scrollTop+m.cursor)%7+1)
+	tag := strings.Repeat("\033[0m", m.scrollTop%7+1)
 
 	// Header line.
 	hint := ""
