@@ -103,6 +103,8 @@ func (m Model) Init() tea.Cmd {
 //	model (tea.Model): Updated Model.
 //	cmd   (tea.Cmd):   Follow-up command, or nil.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	prevScroll := m.scrollTop
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -165,6 +167,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.termHeight = msg.Height
 		// Clamp scroll so the cursor stays visible after resize.
 		m.ensureCursorVisible()
+		return m, tea.ClearScreen
+	}
+
+	// Force full repaint when viewport scrolls — bubbletea's diff renderer
+	// can desync over SSH when many lines shift simultaneously.
+	if m.scrollTop != prevScroll {
+		return m, tea.ClearScreen
 	}
 
 	return m, nil
