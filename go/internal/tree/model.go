@@ -163,6 +163,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.termWidth = msg.Width
 		m.termHeight = msg.Height
+		// Clamp scroll so the cursor stays visible after resize.
+		m.ensureCursorVisible()
 	}
 
 	return m, nil
@@ -271,6 +273,21 @@ func (m *Model) collectSelected() {
 		if m.nodes[i].Type == NodeTypeLeaf && m.nodes[i].Selected {
 			m.SelectedPaths = append(m.SelectedPaths, m.nodes[i].OrigPath)
 		}
+	}
+}
+
+// ensureCursorVisible adjusts scrollTop so the cursor row is within the
+// visible viewport. Called after terminal resize or any cursor movement.
+func (m *Model) ensureCursorVisible() {
+	vis := m.visibleRows()
+	if m.cursor < m.scrollTop {
+		m.scrollTop = m.cursor
+	}
+	if m.cursor >= m.scrollTop+vis {
+		m.scrollTop = m.cursor - vis + 1
+	}
+	if m.scrollTop < 0 {
+		m.scrollTop = 0
 	}
 }
 

@@ -4,52 +4,55 @@ Interactive CLI tools for selectively syncing Claude Code agents and skills to y
 
 ## Overview
 
-Instead of syncing all agents/skills at once, these tools let you pick exactly which ones to install via an interactive terminal UI — arrow keys to navigate, Space to toggle, and right arrow to preview descriptions.
+Instead of syncing all agents/skills at once, these tools let you pick exactly which ones to install via an interactive tree TUI — arrow keys to navigate, Space to toggle items or entire directories, and right arrow to preview descriptions.
 
 ```
  [36/36]  ↑↓=navigate  Space=toggle  a=all  n=none  Enter=confirm  q=cancel  →=preview
 
- ▶ [x] agent-organizer.md
-   [x] business/product-manager.md
-   [x] data-ai/ai-engineer.md
+ ▶ [x] AI-Research-SKILLs/
+     [x] 01-model-architecture/
+       [x] litgpt
+       [x] mamba
+       [x] nanogpt
+     [x] 02-tokenization/
+       [x] huggingface-tokenizers
+       [x] sentencepiece
    ...
 
 ─── description ─
- A highly advanced AI agent that functions as a master orchestrator for
- complex, multi-agent tasks. Analyzes project requirements, defines a team
- of specialized AI agents, and manages their collaborative workflow.
+ A skill for training and fine-tuning large language models
+ using the LitGPT framework.
 ```
 
 ## Tools
 
-| Script | Purpose | Destination |
+| Binary | Purpose | Destination |
 |--------|---------|-------------|
-| `sync_agents.sh` | Sync Claude agents | `~/.claude/agents/` |
-| `sync_skills.sh` | Sync Claude skills | `~/.claude/skills/` |
+| `go/sync-agents` | Sync Claude agents | `~/.claude/agents/` |
+| `go/sync-skills` | Sync Claude skills | `~/.claude/skills/` |
 
-Both scripts clear the destination before syncing so only your selected items remain.
+Selected items are symlinked to the destination. Deselected items that were previously synced are removed.
 
 ## Requirements
 
-- bash 4.3+
-- `rsync` (for `sync_skills.sh`)
 - A terminal with ANSI color support
+
+Pre-built binaries have zero runtime dependencies. To build from source, Go 1.21+ is required.
 
 ## Setup
 
-Place your agents and skills in the expected source directories relative to the scripts:
+Place your agents and skills in the expected source directories:
 
 ```
 claude-agent-skill-sync-tool/
-├── _tui_select.sh          # Shared TUI helper (sourced by both scripts)
-├── sync_agents.sh
-├── sync_skills.sh
+├── go/                     # Go source and binaries
+│   ├── sync-agents
+│   ├── sync-skills
+│   └── ...
 └── claude/
     ├── agents/             # Source agents
     │   ├── agent-organizer.md
     │   ├── business/
-    │   ├── data-ai/
-    │   ├── development/
     │   └── ...
     └── skills/             # Source skills (each subdir contains SKILL.md)
         ├── 01-model-architecture/
@@ -61,17 +64,37 @@ claude-agent-skill-sync-tool/
 ## Usage
 
 ```bash
-# Sync agents interactively
-./sync_agents.sh
+# Build (one-time, or use pre-built binaries)
+cd go && go build ./cmd/sync-skills && go build ./cmd/sync-agents && cd ..
 
 # Sync skills interactively
-./sync_skills.sh
+./go/sync-skills
+
+# Sync agents interactively
+./go/sync-agents
 ```
 
 Override the target home directory for testing:
 
 ```bash
-SYNC_TARGET_HOME=/tmp/test ./sync_agents.sh
+SYNC_TARGET_HOME=/tmp/test ./go/sync-skills
+```
+
+### Cross-compilation
+
+Build for any platform from any platform:
+
+```bash
+cd go
+
+# Linux x86-64
+GOOS=linux GOARCH=amd64 go build -o sync-skills-linux-amd64 ./cmd/sync-skills
+
+# macOS Apple Silicon
+GOOS=darwin GOARCH=arm64 go build -o sync-skills-darwin-arm64 ./cmd/sync-skills
+
+# Windows x86-64
+GOOS=windows GOARCH=amd64 go build -o sync-skills-windows-amd64.exe ./cmd/sync-skills
 ```
 
 ## TUI Controls
@@ -79,7 +102,7 @@ SYNC_TARGET_HOME=/tmp/test ./sync_agents.sh
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate up/down |
-| `Space` | Toggle current item |
+| `Space` | Toggle current item (cascades for directories) |
 | `→` | Show description preview |
 | `←` | Hide description preview |
 | `a` | Select all |
@@ -89,9 +112,12 @@ SYNC_TARGET_HOME=/tmp/test ./sync_agents.sh
 
 ## How It Works
 
-- **`_tui_select.sh`**: Shared library providing `tui_checkbox_select` — a pure-bash interactive checkbox TUI using ANSI escape codes. All items are pre-selected by default. Supports an optional description callback for right-arrow previews.
-- **`sync_agents.sh`**: Discovers all `.md` files under `claude/agents/`, shows the TUI, then copies selected files to `~/.claude/agents/` (clearing first).
-- **`sync_skills.sh`**: Discovers all `SKILL.md` directories under `claude/skills/`, shows the TUI, then rsyncs selected skill directories to `~/.claude/skills/` (clearing first).
+The Go implementation uses [bubbletea](https://github.com/charmbracelet/bubbletea) for a robust terminal UI that handles resize, scrolling, and keyboard input natively.
+
+- **`go/cmd/sync-skills/`**: Discovers all `SKILL.md` directories under `claude/skills/`, presents a tree TUI, then symlinks selected skills to `~/.claude/skills/`.
+- **`go/cmd/sync-agents/`**: Discovers all `.md` files under `claude/agents/`, presents a tree TUI, then symlinks selected agents to `~/.claude/agents/`.
+- **`go/internal/tree/`**: Tree TUI model with hierarchical display, directory cascade toggle, and description preview.
+- **`go/internal/sync/`**: Symlink-based sync that links selected items and removes deselected ones.
 
 ## License
 
