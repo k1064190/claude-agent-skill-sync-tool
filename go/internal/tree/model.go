@@ -360,21 +360,29 @@ func (m Model) View() string {
 		dim    = "\033[2m"
 	)
 
+	// Bubbletea's renderer diffs old vs new frame line-by-line and skips
+	// unchanged lines.  Over SSH this partial repaint can desync.  We embed
+	// an invisible tag that varies with scroll/cursor state so every line
+	// is always "different", forcing a full repaint each frame.
+	// Repeating \033[0m (SGR reset) N times is visually invisible but
+	// produces a unique string per state.
+	tag := strings.Repeat("\033[0m", (m.scrollTop+m.cursor)%7+1)
+
 	// Header line.
 	hint := ""
 	if m.descFn != nil {
 		hint = "  \u2192=preview"
 	}
 	sb.WriteString(fmt.Sprintf(
-		"%s%s [%d/%d]  \u2191\u2193=navigate  Space=toggle  a=all  n=none  Enter=confirm  q=cancel%s%s\n",
-		bold, cyan, selCount, m.leafCount, hint, reset,
+		"%s%s%s [%d/%d]  \u2191\u2193=navigate  Space=toggle  a=all  n=none  Enter=confirm  q=cancel%s%s\n",
+		tag, bold, cyan, selCount, m.leafCount, hint, reset,
 	))
 
 	// Scroll-up indicator.
 	if m.scrollTop > 0 {
-		sb.WriteString(fmt.Sprintf("  %s\u2191 %d more above%s\n", yellow, m.scrollTop, reset))
+		sb.WriteString(fmt.Sprintf("%s  %s\u2191 %d more above%s\n", tag, yellow, m.scrollTop, reset))
 	} else {
-		sb.WriteString("\n")
+		sb.WriteString(tag + "\n")
 	}
 
 	// Visible item rows.
@@ -424,34 +432,34 @@ func (m Model) View() string {
 		if i == m.cursor {
 			// Current row: reverse video, triangle cursor.
 			sb.WriteString(fmt.Sprintf(
-				"%s \u25b6 %s%s %-*s %s\n",
-				rev, indent, mark, labelWidth, node.Label, reset,
+				"%s%s \u25b6 %s%s %-*s %s\n",
+				tag, rev, indent, mark, labelWidth, node.Label, reset,
 			))
 		} else {
 			sb.WriteString(fmt.Sprintf(
-				"   %s%s%s%s %s\n",
-				colour, indent, mark, reset, node.Label,
+				"%s   %s%s%s%s %s\n",
+				tag, colour, indent, mark, reset, node.Label,
 			))
 		}
 	}
 
 	// Pad remaining visible rows.
 	for i := end; i < m.scrollTop+visRows; i++ {
-		sb.WriteString("\n")
+		sb.WriteString(tag + "\n")
 	}
 
 	// Scroll-down indicator.
 	if m.scrollTop+visRows < n {
-		sb.WriteString(fmt.Sprintf("  %s\u2193 %d more below%s\n", yellow, n-m.scrollTop-visRows, reset))
+		sb.WriteString(fmt.Sprintf("%s  %s\u2193 %d more below%s\n", tag, yellow, n-m.scrollTop-visRows, reset))
 	} else {
-		sb.WriteString("\n")
+		sb.WriteString(tag + "\n")
 	}
 
 	// Preview panel (5 lines when a descFn is provided).
 	if m.descFn != nil {
 		if m.previewOpen {
 			// Separator line.
-			sb.WriteString(fmt.Sprintf("%s%s\u2500\u2500 description \u2500\u2500%s\n", bold, cyan, reset))
+			sb.WriteString(fmt.Sprintf("%s%s%s\u2500\u2500 description \u2500\u2500%s\n", tag, bold, cyan, reset))
 
 			// Resolve description text.
 			var descText string
@@ -476,18 +484,18 @@ func (m Model) View() string {
 			// Print up to 3 lines, padding the rest.
 			for row := 0; row < 3; row++ {
 				if row < len(lines) {
-					sb.WriteString(fmt.Sprintf(" %s\n", lines[row]))
+					sb.WriteString(fmt.Sprintf("%s %s\n", tag, lines[row]))
 				} else {
-					sb.WriteString("\n")
+					sb.WriteString(tag + "\n")
 				}
 			}
-			sb.WriteString("\n") // blank line to complete the 5-line block
+			sb.WriteString(tag + "\n") // blank line to complete the 5-line block
 		} else {
 			// Hint when preview is closed.
-			sb.WriteString(fmt.Sprintf("  %s\u2192 right arrow to preview description%s\n", dim, reset))
+			sb.WriteString(fmt.Sprintf("%s  %s\u2192 right arrow to preview description%s\n", tag, dim, reset))
 			// Pad remaining 4 lines.
 			for i := 1; i < 5; i++ {
-				sb.WriteString("\n")
+				sb.WriteString(tag + "\n")
 			}
 		}
 	}
