@@ -1,0 +1,4 @@
+# Track only explicitly opted-in subdirectories; ignore nested git repos
+*
+!.gitignore
+!AI-Research-SKILLs/

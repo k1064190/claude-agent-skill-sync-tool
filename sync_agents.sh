@@ -4,6 +4,10 @@
 
 set -euo pipefail
 
+if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3) )); then
+    printf 'Error: bash 4.3 or newer required (found %s)\n' "$BASH_VERSION" >&2; exit 1
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_tui_select.sh
 source "$ROOT/_tui_select.sh"
@@ -33,7 +37,10 @@ echo "Source : $AGENTS_SRC"
 echo "Dest   : $AGENTS_DEST"
 echo ""
 
-mapfile -t SELECTED < <(tui_checkbox_select ALL_AGENTS get_agent_desc)
+_tts_tmp=$(mktemp)
+tui_tree_select ALL_AGENTS get_agent_desc >"$_tts_tmp"; _tts_rc=$?
+mapfile -t SELECTED <"$_tts_tmp"; rm -f "$_tts_tmp"
+(( _tts_rc == 0 )) || { echo "Selection cancelled."; exit 0; }
 
 if [[ ${#SELECTED[@]} -eq 0 ]]; then
     echo "No agents selected. Exiting."
@@ -50,21 +57,38 @@ echo ""
 read -r -p "Proceed with sync? [y/N]: " confirm </dev/tty
 [[ "$confirm" =~ ^[yY]$ ]] || { echo "Aborted."; exit 0; }
 
-# Clear destination so only selected agents remain
-if [[ -d "$AGENTS_DEST" ]]; then
-    rm -rf "$AGENTS_DEST"
-fi
 mkdir -p "$AGENTS_DEST"
 
-synced=0
+# Build a lookup set of selected agents for O(1) membership test
+declare -A SELECTED_SET=()
 for agent in "${SELECTED[@]}"; do
+    SELECTED_SET["$agent"]=1
+done
+
+linked=0
+removed=0
+
+# For every agent in this repo: symlink if selected, remove our symlink if not
+for agent in "${ALL_AGENTS[@]}"; do
     src="$AGENTS_SRC/$agent"
-    dest_dir="$AGENTS_DEST/$(dirname "$agent")"
-    mkdir -p "$dest_dir"
-    cp "$src" "$dest_dir/"
-    echo "  synced: $agent"
-    synced=$(( synced + 1 ))
+    dest="$AGENTS_DEST/$agent"
+
+    if [[ -n "${SELECTED_SET[$agent]+x}" ]]; then
+        mkdir -p "$(dirname "$dest")"
+        ln -sf "$src" "$dest"
+        echo "  linked: $agent"
+        linked=$(( linked + 1 ))
+    else
+        if [[ -L "$dest" ]]; then
+            target=$(readlink "$dest" 2>/dev/null || true)
+            if [[ "$target" == "$src" ]]; then
+                rm -f "$dest"
+                echo "  removed: $agent"
+                removed=$(( removed + 1 ))
+            fi
+        fi
+    fi
 done
 
 echo ""
-echo "Done. Synced $synced agent(s) to $AGENTS_DEST"
+echo "Done. Linked $linked, removed $removed agent(s) in $AGENTS_DEST"
