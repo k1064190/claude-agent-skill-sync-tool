@@ -1,5 +1,5 @@
-// ABOUTME: CLI entry point for syncing Claude skill directories via symlinks.
-// ABOUTME: Discovers leaf skill directories, presents scope selection and tree TUI.
+// ABOUTME: Unified CLI for syncing Claude Code skills, agents, commands, and rules via symlinks.
+// ABOUTME: Presents scope/type selection, then a tree TUI for interactive item picking.
 
 package main
 
@@ -18,6 +18,8 @@ import (
 	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/yaml"
 )
 
+// --- Skill discovery (leaf directory detection) ---
+
 // supportDirs lists directory names that belong to a skill's internal
 // structure and should not be treated as sub-skill directories.
 var supportDirs = map[string]bool{
@@ -29,19 +31,7 @@ var supportDirs = map[string]bool{
 	"video-promo": true, "src": true, "public": true,
 }
 
-// collectSkills discovers leaf skill directories under srcDir. A directory is
-// a leaf skill when it contains no sub-directories that are themselves skills
-// (support directories like references/ and templates/ are excluded from this
-// check). Results are sorted lexicographically.
-//
-// Args:
-//
-//	srcDir (string): Absolute path to the skills source directory.
-//
-// Returns:
-//
-//	skills ([]string): Sorted relative paths of leaf skill directories.
-//	err    (error):    ReadDir error, or nil on success.
+// collectSkills discovers leaf skill directories under srcDir.
 func collectSkills(srcDir string) ([]string, error) {
 	var skills []string
 	if _, err := findLeafSkills(srcDir, srcDir, &skills); err != nil {
@@ -51,20 +41,6 @@ func collectSkills(srcDir string) ([]string, error) {
 	return skills, nil
 }
 
-// findLeafSkills recursively walks dir and appends relative paths of leaf
-// skill directories to skills. Returns true if dir is or contains a skill
-// directory (so the caller knows not to treat itself as a leaf).
-//
-// Args:
-//
-//	baseDir (string):    The root skills directory (for computing relative paths).
-//	dir     (string):    The current directory being inspected.
-//	skills  (*[]string): Accumulator for discovered leaf skill paths.
-//
-// Returns:
-//
-//	isSkill (bool): True if dir is or contains at least one skill.
-//	err     (error): First ReadDir error encountered, or nil.
 func findLeafSkills(baseDir, dir string, skills *[]string) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -90,7 +66,6 @@ func findLeafSkills(baseDir, dir string, skills *[]string) (bool, error) {
 		}
 	}
 
-	// A leaf skill: has no sub-skill children and is not the base directory.
 	if !hasSubSkill && dir != baseDir {
 		rel, err := filepath.Rel(baseDir, dir)
 		if err != nil {
@@ -102,6 +77,36 @@ func findLeafSkills(baseDir, dir string, skills *[]string) (bool, error) {
 
 	return hasSubSkill, nil
 }
+
+// --- .md file discovery (agents, commands, rules) ---
+
+// collectMdFiles walks srcDir recursively and returns sorted relative paths
+// for every *.md file found.
+func collectMdFiles(srcDir string) ([]string, error) {
+	var items []string
+
+	err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && strings.HasSuffix(info.Name(), ".md") {
+			rel, relErr := filepath.Rel(srcDir, path)
+			if relErr != nil {
+				return relErr
+			}
+			items = append(items, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Strings(items)
+	return items, nil
+}
+
+// --- Main ---
 
 func main() {
 	// --- Title & Config ---
@@ -127,33 +132,51 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Println()
 
-	skillsSrc := cfg.SkillsSource()
-	skillsDest := config.DestDir(scope, "skills")
+	// --- Item Type Selection ---
+	itemType := config.SelectItemType(cfg)
 
-	fmt.Printf("\n  Source : %s\n", skillsSrc)
-	fmt.Printf("  Dest   : %s\n\n", skillsDest)
+	srcDir := cfg.SourceDir(itemType)
+	destDir := config.DestDir(scope, itemType)
 
-	// --- Discover skills ---
-	allSkills, err := collectSkills(skillsSrc)
+	fmt.Printf("  Source : %s\n", srcDir)
+	fmt.Printf("  Dest   : %s\n\n", destDir)
+
+	// --- Discover items ---
+	var allItems []string
+	if itemType == "skills" {
+		allItems, err = collectSkills(srcDir)
+	} else {
+		allItems, err = collectMdFiles(srcDir)
+	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error scanning skills: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error scanning %s: %v\n", itemType, err)
 		os.Exit(1)
 	}
-	if len(allSkills) == 0 {
-		fmt.Fprintf(os.Stderr, "No skills found in %s\n", skillsSrc)
+	if len(allItems) == 0 {
+		fmt.Fprintf(os.Stderr, "No %s found in %s\n", itemType, srcDir)
 		os.Exit(1)
 	}
 
 	// --- Determine initial selection from existing symlinks ---
-	existing := config.ExistingSymlinks(allSkills, skillsSrc, skillsDest)
+	existing := config.ExistingSymlinks(allItems, srcDir, destDir)
 
-	// Build description callback.
-	descFn := func(relPath string) string {
-		return yaml.ExtractDescription(filepath.Join(skillsSrc, relPath, "SKILL.md"))
+	// --- Build description callback ---
+	var descFn tree.DescFunc
+	switch itemType {
+	case "skills":
+		descFn = func(relPath string) string {
+			return yaml.ExtractDescription(filepath.Join(srcDir, relPath, "SKILL.md"))
+		}
+	case "agents", "commands", "rules":
+		descFn = func(relPath string) string {
+			return yaml.ExtractDescription(filepath.Join(srcDir, relPath))
+		}
 	}
 
-	m := tree.NewModel(allSkills, descFn, existing)
+	// --- TUI ---
+	m := tree.NewModel(allItems, descFn, existing)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	finalModel, err := p.Run()
@@ -174,15 +197,15 @@ func main() {
 	}
 
 	if len(result.SelectedPaths) == 0 {
-		fmt.Println("\nNo skills selected — existing symlinks will be removed.")
+		fmt.Printf("\nNo %s selected — existing symlinks will be removed.\n", itemType)
 	} else {
-		fmt.Printf("\nSelected %d skill(s):\n", len(result.SelectedPaths))
+		fmt.Printf("\nSelected %d %s:\n", len(result.SelectedPaths), itemType)
 		for _, s := range result.SelectedPaths {
 			fmt.Printf("  - %s\n", s)
 		}
 	}
 
-	// Read confirmation from /dev/tty so it works regardless of stdin state.
+	// --- Confirmation ---
 	fmt.Println()
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
@@ -201,23 +224,22 @@ func main() {
 		os.Exit(0)
 	}
 
-	if err := os.MkdirAll(skillsDest, 0o755); err != nil {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "Cannot create dest dir: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Build selected set for O(1) lookup.
 	selectedSet := make(map[string]bool, len(result.SelectedPaths))
 	for _, p := range result.SelectedPaths {
 		selectedSet[p] = true
 	}
 
-	syncResult, err := intsync.SyncItems(allSkills, selectedSet, skillsSrc, skillsDest)
+	syncResult, err := intsync.SyncItems(allItems, selectedSet, srcDir, destDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Sync error: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("\nDone. Linked %d, removed %d skill(s) in %s\n",
-		syncResult.Linked, syncResult.Removed, skillsDest)
+	fmt.Printf("\nDone. Linked %d, removed %d %s in %s\n",
+		syncResult.Linked, syncResult.Removed, itemType, destDir)
 }

@@ -38,21 +38,13 @@ jobs:
         with:
           go-version-file: go/go.mod
 
-      - name: Build sync-agents
+      - name: Build claude-sync
         working-directory: go
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
-        run: go build -ldflags="-s -w" -o ../dist/sync-agents-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/sync-agents
-
-      - name: Build sync-skills
-        working-directory: go
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
-        run: go build -ldflags="-s -w" -o ../dist/sync-skills-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/sync-skills
+        run: go build -ldflags="-s -w" -o ../dist/claude-sync-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/claude-sync
 
       - uses: actions/upload-artifact@v4
         with:

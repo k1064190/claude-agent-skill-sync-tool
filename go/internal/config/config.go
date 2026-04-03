@@ -29,14 +29,13 @@ type Config struct {
 	SourceRoot string `json:"source_root"`
 }
 
-// SkillsSource returns the absolute path to the skills source directory.
-func (c *Config) SkillsSource() string {
-	return filepath.Join(c.SourceRoot, "skills")
-}
+// ItemTypes lists the supported sync targets in display order.
+var ItemTypes = []string{"skills", "agents", "commands", "rules"}
 
-// AgentsSource returns the absolute path to the agents source directory.
-func (c *Config) AgentsSource() string {
-	return filepath.Join(c.SourceRoot, "agents")
+// SourceDir returns the absolute path to the source directory for the given
+// item type (e.g. "skills" → "<root>/skills").
+func (c *Config) SourceDir(itemType string) string {
+	return filepath.Join(c.SourceRoot, itemType)
 }
 
 // configDir returns the path to ~/.config/claude-sync/.
@@ -153,13 +152,16 @@ func RunSetup() (*Config, error) {
 		input = abs
 	}
 
-	// Verify skills/ or agents/ exists under the source root.
-	skillsDir := filepath.Join(input, "skills")
-	agentsDir := filepath.Join(input, "agents")
-	_, sErr := os.Stat(skillsDir)
-	_, aErr := os.Stat(agentsDir)
-	if sErr != nil && aErr != nil {
-		fmt.Printf("  Warning: neither %s nor %s found.\n", skillsDir, agentsDir)
+	// Verify at least one item type directory exists.
+	found := false
+	for _, t := range ItemTypes {
+		if _, err := os.Stat(filepath.Join(input, t)); err == nil {
+			found = true
+			break
+		}
+	}
+	if !found {
+		fmt.Printf("  Warning: no skills/, agents/, commands/, or rules/ found in %s\n", input)
 		fmt.Print("  Continue anyway? [y/N]: ")
 		answer := readLine()
 		if answer != "y" && answer != "Y" {
@@ -174,8 +176,7 @@ func RunSetup() (*Config, error) {
 		return nil, fmt.Errorf("save config: %w", err)
 	}
 	fmt.Printf("\n  Config saved to %s\n", configPath())
-	fmt.Printf("  Skills : %s\n", cfg.SkillsSource())
-	fmt.Printf("  Agents : %s\n\n", cfg.AgentsSource())
+	fmt.Printf("  Source root: %s\n\n", input)
 	return cfg, nil
 }
 
@@ -215,6 +216,55 @@ func SelectScope(cfg *Config) (Scope, *Config, error) {
 		default:
 			fmt.Println("  Invalid choice. Please enter 1, 2, or 3.\n")
 		}
+	}
+}
+
+// SelectItemType displays available item types and returns the user's choice.
+// Only types whose source directory exists are shown.
+//
+// Args:
+//
+//	cfg (*Config): Current config (for source root).
+//
+// Returns:
+//
+//	itemType (string): Selected item type (e.g. "skills").
+func SelectItemType(cfg *Config) string {
+	// Find which types have source directories.
+	var available []string
+	for _, t := range ItemTypes {
+		if _, err := os.Stat(cfg.SourceDir(t)); err == nil {
+			available = append(available, t)
+		}
+	}
+
+	if len(available) == 0 {
+		fmt.Fprintf(os.Stderr, "  No item type directories found in %s\n", cfg.SourceRoot)
+		os.Exit(1)
+	}
+
+	if len(available) == 1 {
+		fmt.Printf("  Syncing: %s\n\n", available[0])
+		return available[0]
+	}
+
+	fmt.Println("  What to sync?")
+	for i, t := range available {
+		fmt.Printf("  [%d] %s\n", i+1, t)
+	}
+	fmt.Printf("\n  Select [1-%d]: ", len(available))
+
+	for {
+		answer := readLine()
+		for i, t := range available {
+			if answer == fmt.Sprintf("%d", i+1) || answer == t {
+				return t
+			}
+		}
+		if answer == "" && len(available) > 0 {
+			return available[0]
+		}
+		fmt.Printf("  Invalid choice. Select [1-%d]: ", len(available))
 	}
 }
 
