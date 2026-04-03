@@ -30,7 +30,7 @@ type Config struct {
 }
 
 // ItemTypes lists the supported sync targets in display order.
-var ItemTypes = []string{"skills", "agents", "commands", "rules"}
+var ItemTypes = []string{"skills", "agents", "rules"}
 
 // SourceDir returns the absolute path to the source directory for the given
 // item type (e.g. "skills" → "<root>/skills").
@@ -161,7 +161,7 @@ func RunSetup() (*Config, error) {
 		}
 	}
 	if !found {
-		fmt.Printf("  Warning: no skills/, agents/, commands/, or rules/ found in %s\n", input)
+		fmt.Printf("  Warning: no skills/, agents/, or rules/ found in %s\n", input)
 		fmt.Print("  Continue anyway? [y/N]: ")
 		answer := readLine()
 		if answer != "y" && answer != "Y" {

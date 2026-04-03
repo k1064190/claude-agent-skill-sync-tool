@@ -169,7 +169,7 @@ func main() {
 		descFn = func(relPath string) string {
 			return yaml.ExtractDescription(filepath.Join(srcDir, relPath, "SKILL.md"))
 		}
-	case "agents", "commands", "rules":
+	case "agents", "rules":
 		descFn = func(relPath string) string {
 			return yaml.ExtractDescription(filepath.Join(srcDir, relPath))
 		}

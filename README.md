@@ -1,10 +1,10 @@
 # claude-sync
 
-Interactive CLI for selectively syncing Claude Code skills, agents, commands, and rules to your environment via symlinks.
+Interactive CLI for selectively syncing Claude Code skills, agents, and rules to your environment via symlinks.
 
 ## Why?
 
-Claude Code loads every skill, agent, command, and rule found in `~/.claude/`. When you collect many of these across different domains, problems start to appear:
+Claude Code loads every skill, agent, and rule found in `~/.claude/`. When you collect many of these across different domains, problems start to appear:
 
 - **Context bloat** — Unused skills still consume context window space, leaving less room for actual work.
 - **Interference** — Skills designed for different workflows can conflict or produce unexpected behavior.
@@ -73,7 +73,6 @@ The default is the current working directory. The source root should contain one
 <source-root>/
 ├── skills/           # Skill directories (leaf dirs auto-discovered)
 ├── agents/           # Agent .md files
-├── commands/         # Command .md files (become slash commands)
 └── rules/            # Rule .md files
 ```
 
@@ -103,10 +102,9 @@ Choose what to sync. Only types with existing source directories are shown:
   What to sync?
   [1] skills
   [2] agents
-  [3] commands
-  [4] rules
+  [3] rules
 
-  Select [1-4]:
+  Select [1-3]:
 ```
 
 ### 4. Tree Selection
@@ -173,9 +171,9 @@ claude-sync    # → User/Project → skills → pick ML-related skills only
 claude-sync    # → User scope → agents → toggle agents on/off
 ```
 
-**Managing custom commands:**
+**Managing rules:**
 ```bash
-claude-sync    # → Project scope → commands → pick project-specific commands
+claude-sync    # → Project scope → rules → pick project-specific rules
 ```
 
 ## Cross-Compilation
