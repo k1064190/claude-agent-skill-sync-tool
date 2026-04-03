@@ -7,7 +7,7 @@ Interactive CLI tools for selectively syncing Claude Code agents and skills to y
 Instead of syncing all agents/skills at once, these tools let you pick exactly which ones to install via an interactive tree TUI — arrow keys to navigate, Space to toggle items or entire directories, and right arrow to preview descriptions.
 
 ```
- [36/36]  ↑↓=navigate  Space=toggle  a=all  n=none  Enter=confirm  q=cancel  →=preview
+ [103/103]  ↑↓=navigate  PgUp/PgDn=page  Space=toggle  a=all  n=none  Enter=confirm  q=cancel  →=preview
 
  ▶ [x] AI-Research-SKILLs/
      [x] 01-model-architecture/
@@ -37,7 +37,7 @@ Selected items are symlinked to the destination. Deselected items that were prev
 
 - A terminal with ANSI color support
 
-Pre-built binaries have zero runtime dependencies. To build from source, Go 1.21+ is required.
+Pre-built binaries have zero runtime dependencies. To build from source, Go 1.24+ is required.
 
 ## Setup
 
@@ -54,11 +54,15 @@ claude-agent-skill-sync-tool/
     │   ├── agent-organizer.md
     │   ├── business/
     │   └── ...
-    └── skills/             # Source skills (each subdir contains SKILL.md)
-        ├── 01-model-architecture/
-        │   ├── litgpt/
+    └── skills/             # Source skills (leaf directories are auto-discovered)
+        ├── AI-Research-SKILLs/
+        │   ├── 01-model-architecture/
+        │   │   ├── litgpt/
+        │   │   └── ...
         │   └── ...
-        └── ...
+        └── Agent-Skills-for-Context-Engineering/
+            └── skills/
+                └── ...
 ```
 
 ## Usage
@@ -102,6 +106,7 @@ GOOS=windows GOARCH=amd64 go build -o sync-skills-windows-amd64.exe ./cmd/sync-s
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate up/down |
+| `PgUp` / `PgDn` | Page up/down |
 | `Space` | Toggle current item (cascades for directories) |
 | `→` | Show description preview |
 | `←` | Hide description preview |
@@ -114,7 +119,7 @@ GOOS=windows GOARCH=amd64 go build -o sync-skills-windows-amd64.exe ./cmd/sync-s
 
 The Go implementation uses [bubbletea](https://github.com/charmbracelet/bubbletea) for a robust terminal UI that handles resize, scrolling, and keyboard input natively.
 
-- **`go/cmd/sync-skills/`**: Discovers all `SKILL.md` directories under `claude/skills/`, presents a tree TUI, then symlinks selected skills to `~/.claude/skills/`.
+- **`go/cmd/sync-skills/`**: Discovers leaf skill directories under `claude/skills/` (directories with no sub-skill children), presents a tree TUI, then symlinks selected skills to `~/.claude/skills/`.
 - **`go/cmd/sync-agents/`**: Discovers all `.md` files under `claude/agents/`, presents a tree TUI, then symlinks selected agents to `~/.claude/agents/`.
 - **`go/internal/tree/`**: Tree TUI model with hierarchical display, directory cascade toggle, and description preview.
 - **`go/internal/sync/`**: Symlink-based sync that links selected items and removes deselected ones.

@@ -63,9 +63,21 @@ func targetHome() string {
 	return home
 }
 
-// collectSkills walks srcDir recursively looking for files named "SKILL.md".
-// The parent directory of each SKILL.md (relative to srcDir) is the skill item.
-// Results are sorted lexicographically.
+// supportDirs lists directory names that belong to a skill's internal
+// structure and should not be treated as sub-skill directories.
+var supportDirs = map[string]bool{
+	"references": true, "templates": true, "scripts": true,
+	"docs": true, "dev_data": true, "examples": true,
+	"demos": true, "packages": true, "anthropic_official_docs": true,
+	"node_modules": true, "__pycache__": true,
+	"template": true, "researcher": true,
+	"video-promo": true, "src": true, "public": true,
+}
+
+// collectSkills discovers leaf skill directories under srcDir. A directory is
+// a leaf skill when it contains no sub-directories that are themselves skills
+// (support directories like references/ and templates/ are excluded from this
+// check). Results are sorted lexicographically.
 //
 // Args:
 //
@@ -73,32 +85,67 @@ func targetHome() string {
 //
 // Returns:
 //
-//	skills ([]string): Sorted relative paths of skill directories (e.g. "somecat/my-skill").
-//	err    (error):    Walk error, or nil on success.
+//	skills ([]string): Sorted relative paths of leaf skill directories.
+//	err    (error):    ReadDir error, or nil on success.
 func collectSkills(srcDir string) ([]string, error) {
 	var skills []string
-
-	err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() && info.Name() == "SKILL.md" {
-			// The skill item is the directory containing SKILL.md.
-			skillDir := filepath.Dir(path)
-			rel, relErr := filepath.Rel(srcDir, skillDir)
-			if relErr != nil {
-				return relErr
-			}
-			skills = append(skills, rel)
-		}
-		return nil
-	})
-	if err != nil {
+	if _, err := findLeafSkills(srcDir, srcDir, &skills); err != nil {
 		return nil, err
 	}
-
 	sort.Strings(skills)
 	return skills, nil
+}
+
+// findLeafSkills recursively walks dir and appends relative paths of leaf
+// skill directories to skills. Returns true if dir is or contains a skill
+// directory (so the caller knows not to treat itself as a leaf).
+//
+// Args:
+//
+//	baseDir (string):    The root skills directory (for computing relative paths).
+//	dir     (string):    The current directory being inspected.
+//	skills  (*[]string): Accumulator for discovered leaf skill paths.
+//
+// Returns:
+//
+//	isSkill (bool): True if dir is or contains at least one skill.
+//	err     (error): First ReadDir error encountered, or nil.
+func findLeafSkills(baseDir, dir string, skills *[]string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+
+	hasSubSkill := false
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || supportDirs[name] {
+			continue
+		}
+		child := filepath.Join(dir, name)
+		childIsSkill, err := findLeafSkills(baseDir, child, skills)
+		if err != nil {
+			return false, err
+		}
+		if childIsSkill {
+			hasSubSkill = true
+		}
+	}
+
+	// A leaf skill: has no sub-skill children and is not the base directory.
+	if !hasSubSkill && dir != baseDir {
+		rel, err := filepath.Rel(baseDir, dir)
+		if err != nil {
+			return false, err
+		}
+		*skills = append(*skills, rel)
+		return true, nil
+	}
+
+	return hasSubSkill, nil
 }
 
 func main() {
@@ -147,13 +194,12 @@ func main() {
 	}
 
 	if len(result.SelectedPaths) == 0 {
-		fmt.Println("No skills selected. Exiting.")
-		os.Exit(0)
-	}
-
-	fmt.Printf("\nSelected %d skill(s):\n", len(result.SelectedPaths))
-	for _, s := range result.SelectedPaths {
-		fmt.Printf("  - %s\n", s)
+		fmt.Println("\nNo skills selected — existing symlinks will be removed.")
+	} else {
+		fmt.Printf("\nSelected %d skill(s):\n", len(result.SelectedPaths))
+		for _, s := range result.SelectedPaths {
+			fmt.Printf("  - %s\n", s)
+		}
 	}
 
 	// Read confirmation from /dev/tty so it works regardless of stdin state.

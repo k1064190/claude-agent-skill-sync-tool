@@ -145,13 +145,12 @@ func main() {
 	}
 
 	if len(result.SelectedPaths) == 0 {
-		fmt.Println("No agents selected. Exiting.")
-		os.Exit(0)
-	}
-
-	fmt.Printf("\nSelected %d agent(s):\n", len(result.SelectedPaths))
-	for _, a := range result.SelectedPaths {
-		fmt.Printf("  - %s\n", a)
+		fmt.Println("\nNo agents selected — existing symlinks will be removed.")
+	} else {
+		fmt.Printf("\nSelected %d agent(s):\n", len(result.SelectedPaths))
+		for _, a := range result.SelectedPaths {
+			fmt.Printf("  - %s\n", a)
+		}
 	}
 
 	// Read confirmation from /dev/tty so it works regardless of stdin state.
