@@ -1,9 +1,0 @@
-# Track skill directory names only; skill content is user-specific
-# Ignore root-level files but not directories
-*
-!*/
-!.gitignore
-# Ignore content inside skill directories, keep .gitkeep markers
-*/*
-!*/.gitkeep
-!*/.gitignore

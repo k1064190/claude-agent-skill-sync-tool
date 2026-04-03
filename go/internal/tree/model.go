@@ -55,20 +55,31 @@ type Model struct {
 }
 
 // NewModel constructs a Model from a sorted item list and an optional
-// description callback. All leaves start pre-selected. Terminal dimensions
-// start at conservative defaults; bubbletea sends a WindowSizeMsg almost
-// immediately and the model updates before the first meaningful render.
+// description callback. Leaves whose OrigPath appears in the selected set
+// start checked; all others start unchecked. Pass nil for selected to
+// pre-select every leaf. Terminal dimensions start at conservative defaults;
+// bubbletea sends a WindowSizeMsg almost immediately and the model updates
+// before the first meaningful render.
 //
 // Args:
 //
-//	items  ([]string): Sorted relative item paths.
-//	descFn (DescFunc): Optional; pass nil to disable the preview panel.
+//	items    ([]string):        Sorted relative item paths.
+//	descFn   (DescFunc):        Optional; pass nil to disable the preview panel.
+//	selected (map[string]bool): Set of paths to pre-select; nil means select all.
 //
 // Returns:
 //
 //	m (Model): Initialised Model ready for use with bubbletea.
-func NewModel(items []string, descFn DescFunc) Model {
+func NewModel(items []string, descFn DescFunc, selected map[string]bool) Model {
 	nodes, leafCount := BuildNodes(items)
+	// Apply initial selection state.
+	if selected != nil {
+		for i := range nodes {
+			if nodes[i].Type == NodeTypeLeaf {
+				nodes[i].Selected = selected[nodes[i].OrigPath]
+			}
+		}
+	}
 	return Model{
 		nodes:       nodes,
 		leafCount:   leafCount,

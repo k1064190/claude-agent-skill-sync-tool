@@ -1,92 +1,186 @@
 # claude-agent-skill-sync-tool
 
-Interactive CLI tools for selectively syncing Claude Code agents and skills to your local environment.
+Interactive CLI for selectively syncing Claude Code agents and skills to your environment via symlinks.
 
-## Overview
+## Why?
 
-Instead of syncing all agents/skills at once, these tools let you pick exactly which ones to install via an interactive tree TUI — arrow keys to navigate, Space to toggle items or entire directories, and right arrow to preview descriptions.
+Claude Code loads every agent and skill found in `~/.claude/agents/` and `~/.claude/skills/`. When you collect many skills across different domains, problems start to appear:
 
+- **Context bloat** — Unused skills still consume context window space, leaving less room for actual work.
+- **Interference** — Skills designed for different workflows can conflict or produce unexpected behavior.
+- **No per-project control** — There is no built-in way to say "this project only needs these 5 skills."
+
+This tool solves that. You keep all your agents and skills in one source directory, then use an interactive tree TUI to pick exactly which ones to sync — either globally (user scope) or per-project (project scope). Switching between configurations takes seconds.
+
+## Installation
+
+Download the latest binaries from the [releases page](https://github.com/k1064190/claude-agent-skill-sync-tool/releases) and place them somewhere on your `PATH`:
+
+```bash
+# Linux x86-64 example
+curl -L https://github.com/k1064190/claude-agent-skill-sync-tool/releases/latest/download/sync-skills-linux-amd64 -o ~/.local/bin/sync-skills
+curl -L https://github.com/k1064190/claude-agent-skill-sync-tool/releases/latest/download/sync-agents-linux-amd64 -o ~/.local/bin/sync-agents
+chmod +x ~/.local/bin/sync-skills ~/.local/bin/sync-agents
 ```
- [103/103]  ↑↓=navigate  PgUp/PgDn=page  Space=toggle  a=all  n=none  Enter=confirm  q=cancel  →=preview
 
- ▶ [x] AI-Research-SKILLs/
-     [x] 01-model-architecture/
-       [x] litgpt
-       [x] mamba
-       [x] nanogpt
-     [x] 02-tokenization/
-       [x] huggingface-tokenizers
-       [x] sentencepiece
-   ...
-
-─── description ─
- A skill for training and fine-tuning large language models
- using the LitGPT framework.
+```bash
+# macOS Apple Silicon example
+curl -L https://github.com/k1064190/claude-agent-skill-sync-tool/releases/latest/download/sync-skills-darwin-arm64 -o ~/.local/bin/sync-skills
+curl -L https://github.com/k1064190/claude-agent-skill-sync-tool/releases/latest/download/sync-agents-darwin-arm64 -o ~/.local/bin/sync-agents
+chmod +x ~/.local/bin/sync-skills ~/.local/bin/sync-agents
 ```
 
-## Tools
-
-| Binary | Purpose | Destination |
-|--------|---------|-------------|
-| `go/sync-agents` | Sync Claude agents | `~/.claude/agents/` |
-| `go/sync-skills` | Sync Claude skills | `~/.claude/skills/` |
-
-Selected items are symlinked to the destination. Deselected items that were previously synced are removed.
-
-## Requirements
-
-- A terminal with ANSI color support
-
-Pre-built binaries have zero runtime dependencies. To build from source, Go 1.24+ is required.
-
-## Setup
-
-Place your agents and skills in the expected source directories:
-
+Make sure `~/.local/bin` is in your `PATH`:
+```bash
+# Add to your shell profile (~/.bashrc, ~/.zshrc, etc.) if not already present
+export PATH="$HOME/.local/bin:$PATH"
 ```
-claude-agent-skill-sync-tool/
-├── go/                     # Go source and binaries
-│   ├── sync-agents
-│   ├── sync-skills
-│   └── ...
-└── claude/
-    ├── agents/             # Source agents
-    │   ├── agent-organizer.md
-    │   ├── business/
-    │   └── ...
-    └── skills/             # Source skills (leaf directories are auto-discovered)
-        ├── AI-Research-SKILLs/
-        │   ├── 01-model-architecture/
-        │   │   ├── litgpt/
-        │   │   └── ...
-        │   └── ...
-        └── Agent-Skills-for-Context-Engineering/
-            └── skills/
-                └── ...
+
+Then run from anywhere:
+```bash
+sync-skills
+sync-agents
 ```
+
+<details>
+<summary>Build from source (requires Go 1.24+)</summary>
+
+```bash
+git clone https://github.com/k1064190/claude-agent-skill-sync-tool.git
+cd claude-agent-skill-sync-tool/go
+go build -o ~/.local/bin/sync-skills ./cmd/sync-skills
+go build -o ~/.local/bin/sync-agents ./cmd/sync-agents
+```
+</details>
 
 ## Usage
 
-```bash
-# Build (one-time, or use pre-built binaries)
-cd go && go build ./cmd/sync-skills && go build ./cmd/sync-agents && cd ..
+### 1. First Run — Configuration
 
-# Sync skills interactively
-./go/sync-skills
+On first launch, the tool asks for a **source root** — the directory containing your `skills/` and `agents/` folders.
 
-# Sync agents interactively
-./go/sync-agents
+```
+  ___ _      _   _   _ ___  ___   _____   ___  _  ___
+ / __| |    /_\ | | | |   \| __| / __\ \ / / \| |/ __|
+| (__| |__ / _ \| |_| | |) | _|  \__ \\ V /| .  | (__
+ \___|____/_/ \_\\___/|___/|___| |___/ |_| |_|\_|\___|
+
+  Setting up configuration...
+
+  Source root [/home/user/my-skills-repo]:
+  >
 ```
 
-Override the target home directory for testing:
+The default is the current working directory. The source root should contain:
 
-```bash
-SYNC_TARGET_HOME=/tmp/test ./go/sync-skills
+```
+<source-root>/
+├── skills/
+│   ├── AI-Research-SKILLs/
+│   │   ├── 01-model-architecture/
+│   │   │   ├── litgpt/
+│   │   │   └── ...
+│   │   └── ...
+│   └── Agent-Skills-for-Context-Engineering/
+│       └── skills/
+│           └── ...
+└── agents/
+    ├── agent-organizer.md
+    ├── business/
+    │   └── pm.md
+    └── ...
 ```
 
-### Cross-compilation
+Configuration is saved to `~/.config/claude-sync/config.json` and reused on subsequent runs.
 
-Build for any platform from any platform:
+### 2. Scope Selection
+
+After configuration, choose where to sync:
+
+```
+  [1] User scope    (~/.claude/)
+  [2] Project scope (./.claude/)
+  [3] Set configuration
+
+  Select [1/2/3]:
+```
+
+- **User scope** — Symlinks to `~/.claude/skills/` or `~/.claude/agents/`. Available globally to Claude Code.
+- **Project scope** — Symlinks to `./.claude/skills/` or `./.claude/agents/` in the current directory. Only active when Claude Code runs in this project.
+- **Set configuration** — Re-configure the source root path.
+
+### 3. Tree Selection
+
+The interactive TUI shows all discovered items in a hierarchical tree. Items already synced to the destination are pre-checked.
+
+```
+ [12/103]  ↑↓=navigate  PgUp/PgDn=page  Space=toggle  a=all  n=none  Enter=confirm  q=cancel  →=preview
+
+ ▶ [~] AI-Research-SKILLs/
+     [ ] 01-model-architecture/
+       [ ] litgpt
+       [ ] nanogpt
+     [x] 08-distributed-training/
+       [x] deepspeed
+       [x] pytorch-fsdp2
+   ...
+
+── description ──
+ DeepSpeed ZeRO optimization for distributed training
+```
+
+### 4. Confirmation
+
+After pressing Enter, the tool shows your selection and asks for confirmation before applying changes.
+
+```
+Selected 12 skill(s):
+  - AI-Research-SKILLs/08-distributed-training/deepspeed
+  - AI-Research-SKILLs/08-distributed-training/pytorch-fsdp2
+  ...
+
+Proceed with sync? [y/N]: y
+
+Done. Linked 12, removed 3 skill(s) in ~/.claude/skills
+```
+
+Selected items are symlinked. Previously synced items that are now deselected are removed.
+
+## TUI Controls
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Navigate up/down |
+| `PgUp` / `PgDn` | Page up/down |
+| `Space` | Toggle item (cascades for directories) |
+| `→` | Show description preview |
+| `←` | Hide description preview |
+| `a` | Select all |
+| `n` | Deselect all |
+| `Enter` | Confirm selection |
+| `q` | Cancel |
+
+## Typical Workflows
+
+**Per-project skill sets:**
+```bash
+cd ~/projects/ml-research
+sync-skills          # Select [2] Project scope → pick ML-related skills only
+```
+
+**Switching user-wide skills:**
+```bash
+sync-skills          # Select [1] User scope → toggle skills on/off as needed
+```
+
+**Working with agents:**
+```bash
+sync-agents          # Same workflow, for agent .md files
+```
+
+## Cross-Compilation
+
+Pre-built binaries are available on the [releases page](https://github.com/k1064190/claude-agent-skill-sync-tool/releases). To build manually:
 
 ```bash
 cd go
@@ -101,28 +195,15 @@ GOOS=darwin GOARCH=arm64 go build -o sync-skills-darwin-arm64 ./cmd/sync-skills
 GOOS=windows GOARCH=amd64 go build -o sync-skills-windows-amd64.exe ./cmd/sync-skills
 ```
 
-## TUI Controls
-
-| Key | Action |
-|-----|--------|
-| `↑` / `↓` | Navigate up/down |
-| `PgUp` / `PgDn` | Page up/down |
-| `Space` | Toggle current item (cascades for directories) |
-| `→` | Show description preview |
-| `←` | Hide description preview |
-| `a` | Select all |
-| `n` | Deselect all |
-| `Enter` | Confirm selection |
-| `q` | Cancel |
-
 ## How It Works
 
-The Go implementation uses [bubbletea](https://github.com/charmbracelet/bubbletea) for a robust terminal UI that handles resize, scrolling, and keyboard input natively.
+Built with [bubbletea](https://github.com/charmbracelet/bubbletea) (v1.3) for the terminal UI.
 
-- **`go/cmd/sync-skills/`**: Discovers leaf skill directories under `claude/skills/` (directories with no sub-skill children), presents a tree TUI, then symlinks selected skills to `~/.claude/skills/`.
-- **`go/cmd/sync-agents/`**: Discovers all `.md` files under `claude/agents/`, presents a tree TUI, then symlinks selected agents to `~/.claude/agents/`.
-- **`go/internal/tree/`**: Tree TUI model with hierarchical display, directory cascade toggle, and description preview.
-- **`go/internal/sync/`**: Symlink-based sync that links selected items and removes deselected ones.
+- **`go/internal/config/`** — Persistent config (`~/.config/claude-sync/config.json`), scope selection, and existing symlink detection.
+- **`go/internal/tree/`** — Tree TUI with hierarchical display, cascading directory toggle, and description preview.
+- **`go/internal/sync/`** — Symlink-based sync that links selected items and removes deselected ones (only removes symlinks it created).
+- **`go/cmd/sync-skills/`** — Discovers leaf skill directories (auto-detection, no marker files needed).
+- **`go/cmd/sync-agents/`** — Discovers `.md` agent files.
 
 ## License
 

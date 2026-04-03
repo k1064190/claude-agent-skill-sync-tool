@@ -1,5 +1,5 @@
-// ABOUTME: CLI entry point for syncing Claude agent .md files to ~/.claude/agents/ via symlinks.
-// ABOUTME: Walks claude/agents/ for *.md files, presents a tree TUI, then applies symlink changes.
+// ABOUTME: CLI entry point for syncing Claude agent .md files via symlinks.
+// ABOUTME: Discovers .md files, presents scope selection and tree TUI.
 
 package main
 
@@ -12,57 +12,11 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/config"
 	intsync "github.com/k1064190/claude-agent-skill-sync-tool/go/internal/sync"
 	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/tree"
 	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/yaml"
 )
-
-// projectRoot locates the repository root by walking up from the executable's
-// directory until it finds a directory that contains a "claude" subdirectory,
-// or falls back to the executable's own directory when no such parent exists.
-//
-// Returns:
-//
-//	root (string): Absolute path to the project root directory.
-func projectRoot() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "."
-	}
-	dir := filepath.Dir(exe)
-
-	// Walk up the directory tree looking for the claude/ subdirectory.
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "claude")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-
-	// Fallback: use the directory of the executable.
-	return filepath.Dir(exe)
-}
-
-// targetHome returns the destination home directory, preferring the
-// SYNC_TARGET_HOME environment variable and falling back to os.UserHomeDir.
-//
-// Returns:
-//
-//	home (string): Absolute path to the home directory to use for dest.
-func targetHome() string {
-	if v := os.Getenv("SYNC_TARGET_HOME"); v != "" {
-		return v
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return os.Getenv("HOME")
-	}
-	return home
-}
 
 // collectAgents walks srcDir recursively and returns a sorted list of relative
 // paths for every *.md file found (e.g. "business/pm.md").
@@ -100,15 +54,37 @@ func collectAgents(srcDir string) ([]string, error) {
 }
 
 func main() {
-	root := projectRoot()
-	agentsSrc := filepath.Join(root, "claude", "agents")
-	agentsDest := filepath.Join(targetHome(), ".claude", "agents")
+	// --- Title & Config ---
+	config.PrintTitle()
 
-	fmt.Println("=== Claude Agent Sync ===")
-	fmt.Printf("Source : %s\n", agentsSrc)
-	fmt.Printf("Dest   : %s\n", agentsDest)
-	fmt.Println()
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
 
+	if cfg == nil {
+		cfg, err = config.RunSetup()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Setup error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// --- Scope Selection ---
+	scope, cfg, err := config.SelectScope(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	agentsSrc := cfg.AgentsSource()
+	agentsDest := config.DestDir(scope, "agents")
+
+	fmt.Printf("\n  Source : %s\n", agentsSrc)
+	fmt.Printf("  Dest   : %s\n\n", agentsDest)
+
+	// --- Discover agents ---
 	allAgents, err := collectAgents(agentsSrc)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error scanning agents: %v\n", err)
@@ -119,12 +95,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Build description callback: reads from the .md file directly.
+	// --- Determine initial selection from existing symlinks ---
+	existing := config.ExistingSymlinks(allAgents, agentsSrc, agentsDest)
+
+	// Build description callback.
 	descFn := func(relPath string) string {
 		return yaml.ExtractDescription(filepath.Join(agentsSrc, relPath))
 	}
 
-	m := tree.NewModel(allAgents, descFn)
+	m := tree.NewModel(allAgents, descFn, existing)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	finalModel, err := p.Run()

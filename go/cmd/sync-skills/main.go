@@ -1,5 +1,5 @@
-// ABOUTME: CLI entry point for syncing Claude skill directories to ~/.claude/skills/ via symlinks.
-// ABOUTME: Walks claude/skills/ for SKILL.md files, uses their parent dirs as items, presents tree TUI.
+// ABOUTME: CLI entry point for syncing Claude skill directories via symlinks.
+// ABOUTME: Discovers leaf skill directories, presents scope selection and tree TUI.
 
 package main
 
@@ -12,56 +12,11 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/config"
 	intsync "github.com/k1064190/claude-agent-skill-sync-tool/go/internal/sync"
 	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/tree"
 	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/yaml"
 )
-
-// projectRoot locates the repository root by walking up from the executable's
-// directory until it finds a directory that contains a "claude" subdirectory,
-// or falls back to the executable's own directory when no such parent exists.
-//
-// Returns:
-//
-//	root (string): Absolute path to the project root directory.
-func projectRoot() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "."
-	}
-	dir := filepath.Dir(exe)
-
-	// Walk up the directory tree looking for the claude/ subdirectory.
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "claude")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-
-	return filepath.Dir(exe)
-}
-
-// targetHome returns the destination home directory, preferring the
-// SYNC_TARGET_HOME environment variable and falling back to os.UserHomeDir.
-//
-// Returns:
-//
-//	home (string): Absolute path to the home directory to use for dest.
-func targetHome() string {
-	if v := os.Getenv("SYNC_TARGET_HOME"); v != "" {
-		return v
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return os.Getenv("HOME")
-	}
-	return home
-}
 
 // supportDirs lists directory names that belong to a skill's internal
 // structure and should not be treated as sub-skill directories.
@@ -149,15 +104,37 @@ func findLeafSkills(baseDir, dir string, skills *[]string) (bool, error) {
 }
 
 func main() {
-	root := projectRoot()
-	skillsSrc := filepath.Join(root, "claude", "skills")
-	skillsDest := filepath.Join(targetHome(), ".claude", "skills")
+	// --- Title & Config ---
+	config.PrintTitle()
 
-	fmt.Println("=== Claude Skill Sync ===")
-	fmt.Printf("Source : %s\n", skillsSrc)
-	fmt.Printf("Dest   : %s\n", skillsDest)
-	fmt.Println()
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
 
+	if cfg == nil {
+		cfg, err = config.RunSetup()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Setup error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// --- Scope Selection ---
+	scope, cfg, err := config.SelectScope(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	skillsSrc := cfg.SkillsSource()
+	skillsDest := config.DestDir(scope, "skills")
+
+	fmt.Printf("\n  Source : %s\n", skillsSrc)
+	fmt.Printf("  Dest   : %s\n\n", skillsDest)
+
+	// --- Discover skills ---
 	allSkills, err := collectSkills(skillsSrc)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error scanning skills: %v\n", err)
@@ -168,12 +145,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Build description callback: reads from the SKILL.md inside the skill directory.
+	// --- Determine initial selection from existing symlinks ---
+	existing := config.ExistingSymlinks(allSkills, skillsSrc, skillsDest)
+
+	// Build description callback.
 	descFn := func(relPath string) string {
 		return yaml.ExtractDescription(filepath.Join(skillsSrc, relPath, "SKILL.md"))
 	}
 
-	m := tree.NewModel(allSkills, descFn)
+	m := tree.NewModel(allSkills, descFn, existing)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	finalModel, err := p.Run()
