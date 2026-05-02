@@ -50,7 +50,12 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 	case PlatformClaude:
 		dir = filepath.Join(base, ".claude", itemType)
 	case PlatformGemini:
-		dir = filepath.Join(base, ".gemini", itemType)
+		if !isTemplate && itemType == "skills" {
+			// Gemini supports .agents/skills/ alias for interoperability
+			dir = filepath.Join(base, ".agents", itemType)
+		} else {
+			dir = filepath.Join(base, ".gemini", itemType)
+		}
 	case PlatformCodex:
 		if !isTemplate && itemType == "skills" {
 			// Codex standardizes on .agents/ directory for skills
