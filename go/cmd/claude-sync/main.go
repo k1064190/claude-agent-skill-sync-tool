@@ -177,6 +177,45 @@ func main() {
 		}
 		
 		fmt.Printf("\nDone. Built %d templates across %d platform(s)\n", totalBuilt, len(platforms))
+
+		// --- Compatibility Symlinks (Project Scope only) ---
+		if scope == config.ScopeProject {
+			cwd, _ := os.Getwd()
+			files := []string{"CLAUDE.md", "AGENTS.md", "GEMINI.md"}
+			
+			// Find existing real files among the set
+			var existingReal []string
+			for _, f := range files {
+				path := filepath.Join(cwd, f)
+				info, err := os.Lstat(path)
+				if err == nil && !info.Mode().IsRegular() {
+					// It's a symlink or something else, skip it for "real" source
+					continue
+				}
+				if err == nil && info.Mode().IsRegular() {
+					existingReal = append(existingReal, f)
+				}
+			}
+
+			if len(existingReal) > 0 {
+				// Use the first real file as the source for missing ones
+				source := existingReal[0]
+				for _, f := range files {
+					if f == source {
+						continue
+					}
+					target := filepath.Join(cwd, f)
+					// If it doesn't exist at all, create symlink
+					if _, err := os.Lstat(target); os.IsNotExist(err) {
+						if err := os.Symlink(source, target); err == nil {
+							absTarget, _ := filepath.Abs(target)
+							fmt.Printf("  linked: %s -> %s (compatibility)\n", absTarget, source)
+						}
+					}
+				}
+			}
+		}
+
 		os.Exit(0)
 	}
 
