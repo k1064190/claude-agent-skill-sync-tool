@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,10 +29,12 @@ func TestPlatformDestDir(t *testing.T) {
 		// Clean the expected path
 		expected := tt.expected
 		if expected == "." {
-			// For project root, result should be the absolute path of base, 
-			// so just checking if it exists and is absolute is enough or 
-			// we can compare with Getwd if base was Getwd
-			continue 
+			cwd, _ := os.Getwd()
+			if result != cwd {
+				t.Errorf("PlatformDestDir(%v, %v, %v) = %v; expected project root %v",
+					tt.platform, tt.scope, tt.itemType, result, cwd)
+			}
+			continue
 		}
 
 		if !strings.HasSuffix(result, expected) {

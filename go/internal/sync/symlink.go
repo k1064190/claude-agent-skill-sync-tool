@@ -9,12 +9,14 @@ import (
 	"path/filepath"
 )
 
-// Result holds the outcome of a SyncItems call.
+// Result holds the outcome of a SyncItems or BuildTemplate call.
 type Result struct {
 	// Linked is the number of symlinks successfully created or updated.
 	Linked int
 	// Removed is the number of symlinks removed because the item was deselected.
 	Removed int
+	// Built is the number of template files successfully built.
+	Built int
 }
 
 // SyncItems applies the symlink algorithm for all items in allItems.
@@ -62,8 +64,11 @@ func SyncItems(allItems []string, selected map[string]bool, srcBase, destBase st
 				return res, fmt.Errorf("symlink %s -> %s: %w", dest, src, err)
 			}
 
-			absDest, _ := filepath.Abs(dest)
-			fmt.Printf("  linked: %s\n", absDest)
+			displayPath := dest
+			if abs, err := filepath.Abs(dest); err == nil {
+				displayPath = abs
+			}
+			fmt.Printf("  linked: %s\n", displayPath)
 			res.Linked++
 		} else {
 			// Only remove dest if it is a symlink pointing exactly to src.
@@ -76,8 +81,11 @@ func SyncItems(allItems []string, selected map[string]bool, srcBase, destBase st
 				if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
 					return res, fmt.Errorf("remove %s: %w", dest, err)
 				}
-				absDest, _ := filepath.Abs(dest)
-				fmt.Printf("  removed: %s\n", absDest)
+				displayPath := dest
+				if abs, err := filepath.Abs(dest); err == nil {
+					displayPath = abs
+				}
+				fmt.Printf("  removed: %s\n", displayPath)
 				res.Removed++
 			}
 		}

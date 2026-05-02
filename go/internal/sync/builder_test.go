@@ -33,8 +33,8 @@ func TestBuildTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if res.Linked != 1 {
-		t.Errorf("expected 1 linked, got %d", res.Linked)
+	if res.Built != 1 {
+		t.Errorf("expected 1 built, got %d", res.Built)
 	}
 
 	// Verify CLAUDE.md content

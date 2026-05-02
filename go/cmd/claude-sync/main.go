@@ -155,15 +155,18 @@ func main() {
 	fmt.Printf("  Targets:\n")
 	for _, p := range platforms {
 		dest := config.PlatformDestDir(p, scope, itemType)
-		absDest, _ := filepath.Abs(dest)
-		fmt.Printf("    - [%s] %s\n", p, absDest)
+		displayPath := dest
+		if abs, err := filepath.Abs(dest); err == nil {
+			displayPath = abs
+		}
+		fmt.Printf("    - [%s] %s\n", p, displayPath)
 	}
 	fmt.Println()
 
 	// --- Templates Builder Bypass ---
 	if itemType == "templates" {
 		fmt.Printf("\nBuilding templates for selected platforms...\n")
-		
+
 		totalBuilt := 0
 		for _, p := range platforms {
 			destDir := config.PlatformDestDir(p, scope, itemType)
@@ -172,10 +175,10 @@ func main() {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Build error for %s: %v\n", p, err)
 			} else {
-				totalBuilt += syncResult.Linked
+				totalBuilt += syncResult.Built
 			}
 		}
-		
+
 		fmt.Printf("\nDone. Built %d templates across %d platform(s)\n", totalBuilt, len(platforms))
 
 		// --- Compatibility Symlinks (Project Scope only) ---
@@ -208,8 +211,11 @@ func main() {
 					// If it doesn't exist at all, create symlink
 					if _, err := os.Lstat(target); os.IsNotExist(err) {
 						if err := os.Symlink(source, target); err == nil {
-							absTarget, _ := filepath.Abs(target)
-							fmt.Printf("  linked: %s -> %s (compatibility)\n", absTarget, source)
+							displayPath := target
+							if abs, err := filepath.Abs(target); err == nil {
+								displayPath = abs
+							}
+							fmt.Printf("  linked: %s -> %s (compatibility)\n", displayPath, source)
 						}
 					}
 				}

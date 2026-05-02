@@ -107,6 +107,8 @@ For `skills`, `agents`, and `rules`, use the interactive TUI to pick items. The 
 | Key             | Action                                 |
 | --------------- | -------------------------------------- |
 | `↑` / `↓`       | Navigate up/down                       |
+| `PgUp` / `PgDn` | Page up/down                           |
+| `←` / `→`       | Toggle/Hide description preview        |
 | `Space`         | Toggle item / Platform                 |
 | `a`             | Select all                             |
 | `n`             | Deselect all                           |
@@ -120,7 +122,7 @@ For `skills`, `agents`, and `rules`, use the interactive TUI to pick items. The 
 | **Claude** | `~/.claude/skills` | `~/.claude/agents` | `CLAUDE.md` |
 | **Gemini** | `~/.agents/skills` | `~/.gemini/agents` | `GEMINI.md` |
 | **Codex** | `~/.agents/skills` | `~/.codex/agents` | `AGENTS.md` |
-| **Opencode** | N/A | `~/.config/opencode/agents` | `AGENTS.md` |
+| **Opencode** | `~/.config/opencode/skills` | `~/.config/opencode/agents` | `AGENTS.md` |
 
 ## How It Works
 

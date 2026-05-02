@@ -15,11 +15,11 @@ func BuildTemplate(srcDir string, destDir string, platform config.Platform) (Res
 	var res Result
 
 	commonFile := filepath.Join(srcDir, "common.md")
-	
+
 	// Determine platform file and target file name
 	var platformFile string
 	var targetFileName string
-	
+
 	switch platform {
 	case config.PlatformClaude:
 		platformFile = filepath.Join(srcDir, "claude.md")
@@ -45,12 +45,16 @@ func BuildTemplate(srcDir string, destDir string, platform config.Platform) (Res
 	if data, err := os.ReadFile(commonFile); err == nil {
 		builder.Write(data)
 		builder.WriteString("\n\n")
+	} else if !os.IsNotExist(err) {
+		return res, fmt.Errorf("read common template %s: %w", commonFile, err)
 	}
 
 	// Read platform-specific .md
 	if data, err := os.ReadFile(platformFile); err == nil {
 		builder.Write(data)
 		builder.WriteString("\n")
+	} else if !os.IsNotExist(err) {
+		return res, fmt.Errorf("read platform template %s: %w", platformFile, err)
 	}
 
 	// Write to destination
@@ -61,9 +65,13 @@ func BuildTemplate(srcDir string, destDir string, platform config.Platform) (Res
 		if err := os.WriteFile(destPath, []byte(builder.String()), 0o644); err != nil {
 			return res, fmt.Errorf("write %s: %w", destPath, err)
 		}
-		absDest, _ := filepath.Abs(destPath)
-		fmt.Printf("  built: %s\n", absDest)
-		res.Linked++ // Re-using Linked to indicate success
+
+		displayPath := destPath
+		if abs, err := filepath.Abs(destPath); err == nil {
+			displayPath = abs
+		}
+		fmt.Printf("  built: %s\n", displayPath)
+		res.Built++ // Successfully built
 	} else {
 		fmt.Printf("  skipped %s (no templates found)\n", targetFileName)
 	}

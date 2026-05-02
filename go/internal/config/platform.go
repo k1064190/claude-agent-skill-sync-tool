@@ -21,7 +21,7 @@ func AllPlatforms() []Platform {
 }
 
 // PlatformDestDir returns the destination directory for the given platform, scope, and item type.
-// If the target is project scope, it prefixes with ./ (except Opencode which might be global only, but let's follow the standard).
+// It returns an absolute path using the user's home directory or the current working directory.
 func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 	var base string
 	switch scope {
@@ -75,6 +75,9 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 		} else {
 			dir = filepath.Join(base, ".config", "opencode", itemType)
 		}
+	default:
+		// Unknown platform - return empty string to indicate failure or handled elsewhere
+		return ""
 	}
 	return filepath.Clean(dir)
 }
