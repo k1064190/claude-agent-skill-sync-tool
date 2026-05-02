@@ -29,12 +29,14 @@ chmod +x ~/.local/bin/claude-sync
 ```
 
 Make sure `~/.local/bin` is in your `PATH`:
+
 ```bash
 # Add to your shell profile (~/.bashrc, ~/.zshrc, etc.) if not already present
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Then run from anywhere:
+
 ```bash
 claude-sync
 ```
@@ -47,6 +49,7 @@ git clone https://github.com/k1064190/claude-agent-skill-sync-tool.git
 cd claude-agent-skill-sync-tool/go
 go build -o ~/.local/bin/claude-sync ./cmd/claude-sync
 ```
+
 </details>
 
 ## Usage
@@ -146,32 +149,35 @@ Selected items are symlinked. Previously synced items that are now deselected ar
 
 ## TUI Controls
 
-| Key | Action |
-|-----|--------|
-| `↑` / `↓` | Navigate up/down |
-| `PgUp` / `PgDn` | Page up/down |
-| `Space` | Toggle item (cascades for directories) |
-| `→` | Show description preview |
-| `←` | Hide description preview |
-| `a` | Select all |
-| `n` | Deselect all |
-| `Enter` | Confirm selection |
-| `q` | Cancel |
+| Key             | Action                                 |
+| --------------- | -------------------------------------- |
+| `↑` / `↓`       | Navigate up/down                       |
+| `PgUp` / `PgDn` | Page up/down                           |
+| `Space`         | Toggle item (cascades for directories) |
+| `→`             | Show description preview               |
+| `←`             | Hide description preview               |
+| `a`             | Select all                             |
+| `n`             | Deselect all                           |
+| `Enter`         | Confirm selection                      |
+| `q`             | Cancel                                 |
 
 ## Typical Workflows
 
 **Per-project skill sets:**
+
 ```bash
 cd ~/projects/ml-research
 claude-sync    # → User/Project → skills → pick ML-related skills only
 ```
 
 **Switching user-wide agents:**
+
 ```bash
 claude-sync    # → User scope → agents → toggle agents on/off
 ```
 
 **Managing rules:**
+
 ```bash
 claude-sync    # → Project scope → rules → pick project-specific rules
 ```

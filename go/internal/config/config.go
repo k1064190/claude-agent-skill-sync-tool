@@ -30,7 +30,7 @@ type Config struct {
 }
 
 // ItemTypes lists the supported sync targets in display order.
-var ItemTypes = []string{"skills", "agents", "rules"}
+var ItemTypes = []string{"skills", "agents", "rules", "templates"}
 
 // SourceDir returns the absolute path to the source directory for the given
 // item type (e.g. "skills" → "<root>/skills").
@@ -133,7 +133,7 @@ func readLine() string {
 //	cfg (*Config): Newly created config.
 //	err (error):   Save error, or nil.
 func RunSetup() (*Config, error) {
-	fmt.Println("  Setting up configuration...\n")
+	fmt.Println("  Setting up configuration...")
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -214,7 +214,7 @@ func SelectScope(cfg *Config) (Scope, *Config, error) {
 			cfg = newCfg
 			continue
 		default:
-			fmt.Println("  Invalid choice. Please enter 1, 2, or 3.\n")
+			fmt.Println("  Invalid choice. Please enter 1, 2, or 3.")
 		}
 	}
 }

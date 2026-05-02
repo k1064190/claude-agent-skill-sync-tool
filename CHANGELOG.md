@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [0.1.1.0] - 2026-03-28
 
 ### Added
+
 - `tui_tree_select()` — hierarchical tree TUI for slash-delimited paths; dir nodes show
   `[x]`/`[ ]`/`[~]` computed state; Space on a dir cascades to all descendants
 - `_tui_tree_build()` at module level — parses input items into parallel display arrays
@@ -18,6 +19,7 @@ All notable changes to this project will be documented in this file.
   files and `.gitignore` rules; actual agent/skill content excluded
 
 ### Changed
+
 - `sync_agents.sh` and `sync_skills.sh`: replaced `tui_checkbox_select` call with
   `tui_tree_select` for hierarchical selection
 - Sync behavior: replaced `rm -rf` + `cp`/`rsync` with surgical symlink management —
@@ -31,4 +33,5 @@ All notable changes to this project will be documented in this file.
 ## [0.1.0.0] - 2026-03-28
 
 ### Added
+
 - Initial release: `tui_checkbox_select` flat TUI, `sync_agents.sh`, `sync_skills.sh`
