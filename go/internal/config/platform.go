@@ -39,8 +39,10 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 		base = home
 	}
 
+	isTemplate := false
 	if itemType == "templates" {
 		itemType = ""
+		isTemplate = true
 	}
 
 	var dir string
@@ -50,7 +52,12 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 	case PlatformGemini:
 		dir = filepath.Join(base, ".gemini", itemType)
 	case PlatformCodex:
-		dir = filepath.Join(base, ".codex", itemType)
+		if !isTemplate && (itemType == "skills" || itemType == "agents") {
+			// Codex standardizes on .agents/ directory for skills
+			dir = filepath.Join(base, ".agents", itemType)
+		} else {
+			dir = filepath.Join(base, ".codex", itemType)
+		}
 	case PlatformOpencode:
 		if scope == ScopeProject {
 			dir = filepath.Join(base, ".config", "opencode", itemType)

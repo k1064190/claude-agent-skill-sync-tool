@@ -15,7 +15,7 @@ func TestPlatformDestDir(t *testing.T) {
 	}{
 		{PlatformClaude, ScopeUser, "skills", filepath.Join(".claude", "skills")},
 		{PlatformGemini, ScopeUser, "skills", filepath.Join(".gemini", "skills")},
-		{PlatformCodex, ScopeProject, "agents", filepath.Join(".codex", "agents")},
+		{PlatformCodex, ScopeProject, "agents", filepath.Join(".agents", "agents")},
 		{PlatformOpencode, ScopeUser, "templates", filepath.Join(".config", "opencode")},
 		{PlatformClaude, ScopeProject, "templates", ".claude"},
 	}
