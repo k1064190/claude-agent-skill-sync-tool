@@ -1,5 +1,5 @@
 // ABOUTME: Unified CLI for syncing Claude Code skills, agents, commands, and rules via symlinks.
-// ABOUTME: Presents scope/type selection, then a tree TUI for interactive item picking.
+// ABOUTME: Presents scope/type/platform selection, then a tree TUI for interactive item picking.
 
 package main
 
@@ -15,6 +15,7 @@ import (
 	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/config"
 	intsync "github.com/k1064190/claude-agent-skill-sync-tool/go/internal/sync"
 	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/tree"
+	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/ui"
 	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/yaml"
 )
 
@@ -126,6 +127,17 @@ func main() {
 		}
 	}
 
+	// --- Platform Selection ---
+	platforms, err := ui.RunPlatformSelect()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error selecting platforms: %v\n", err)
+		os.Exit(1)
+	}
+	if len(platforms) == 0 {
+		fmt.Println("No platforms selected. Cancelled.")
+		os.Exit(0)
+	}
+
 	// --- Scope Selection ---
 	scope, cfg, err := config.SelectScope(cfg)
 	if err != nil {
@@ -138,10 +150,80 @@ func main() {
 	itemType := config.SelectItemType(cfg)
 
 	srcDir := cfg.SourceDir(itemType)
-	destDir := config.DestDir(scope, itemType)
 
 	fmt.Printf("  Source : %s\n", srcDir)
-	fmt.Printf("  Dest   : %s\n\n", destDir)
+	fmt.Printf("  Targets:\n")
+	for _, p := range platforms {
+		dest := config.PlatformDestDir(p, scope, itemType)
+		displayPath := dest
+		if abs, err := filepath.Abs(dest); err == nil {
+			displayPath = abs
+		}
+		fmt.Printf("    - [%s] %s\n", p, displayPath)
+	}
+	fmt.Println()
+
+	// --- Templates Builder Bypass ---
+	if itemType == "templates" {
+		fmt.Printf("\nBuilding templates for selected platforms...\n")
+
+		totalBuilt := 0
+		for _, p := range platforms {
+			destDir := config.PlatformDestDir(p, scope, itemType)
+			fmt.Printf("\nBuilding for %s...\n", p)
+			syncResult, err := intsync.BuildTemplate(srcDir, destDir, p)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Build error for %s: %v\n", p, err)
+			} else {
+				totalBuilt += syncResult.Built
+			}
+		}
+
+		fmt.Printf("\nDone. Built %d templates across %d platform(s)\n", totalBuilt, len(platforms))
+
+		// --- Compatibility Symlinks (Project Scope only) ---
+		if scope == config.ScopeProject {
+			cwd, _ := os.Getwd()
+			files := []string{"CLAUDE.md", "AGENTS.md", "GEMINI.md"}
+			
+			// Find existing real files among the set
+			var existingReal []string
+			for _, f := range files {
+				path := filepath.Join(cwd, f)
+				info, err := os.Lstat(path)
+				if err == nil && !info.Mode().IsRegular() {
+					// It's a symlink or something else, skip it for "real" source
+					continue
+				}
+				if err == nil && info.Mode().IsRegular() {
+					existingReal = append(existingReal, f)
+				}
+			}
+
+			if len(existingReal) > 0 {
+				// Use the first real file as the source for missing ones
+				source := existingReal[0]
+				for _, f := range files {
+					if f == source {
+						continue
+					}
+					target := filepath.Join(cwd, f)
+					// If it doesn't exist at all, create symlink
+					if _, err := os.Lstat(target); os.IsNotExist(err) {
+						if err := os.Symlink(source, target); err == nil {
+							displayPath := target
+							if abs, err := filepath.Abs(target); err == nil {
+								displayPath = abs
+							}
+							fmt.Printf("  linked: %s -> %s (compatibility)\n", displayPath, source)
+						}
+					}
+				}
+			}
+		}
+
+		os.Exit(0)
+	}
 
 	// --- Discover items ---
 	var allItems []string
@@ -160,7 +242,17 @@ func main() {
 	}
 
 	// --- Determine initial selection from existing symlinks ---
-	existing := config.ExistingSymlinks(allItems, srcDir, destDir)
+	// Union of existing symlinks across all platforms
+	existingUnion := make(map[string]bool)
+	for _, p := range platforms {
+		destDir := config.PlatformDestDir(p, scope, itemType)
+		existing := config.ExistingSymlinks(allItems, srcDir, destDir)
+		for k, v := range existing {
+			if v {
+				existingUnion[k] = true
+			}
+		}
+	}
 
 	// --- Build description callback ---
 	var descFn tree.DescFunc
@@ -176,10 +268,10 @@ func main() {
 	}
 
 	// --- TUI ---
-	m := tree.NewModel(allItems, descFn, existing)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	m := tree.NewModel(allItems, descFn, existingUnion)
+	prog := tea.NewProgram(m, tea.WithAltScreen())
 
-	finalModel, err := p.Run()
+	finalModel, err := prog.Run()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 		os.Exit(1)
@@ -224,22 +316,32 @@ func main() {
 		os.Exit(0)
 	}
 
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot create dest dir: %v\n", err)
-		os.Exit(1)
-	}
-
 	selectedSet := make(map[string]bool, len(result.SelectedPaths))
 	for _, p := range result.SelectedPaths {
 		selectedSet[p] = true
 	}
 
-	syncResult, err := intsync.SyncItems(allItems, selectedSet, srcDir, destDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Sync error: %v\n", err)
-		os.Exit(1)
+	// Sync to all selected platforms
+	totalLinked := 0
+	totalRemoved := 0
+	for _, p := range platforms {
+		destDir := config.PlatformDestDir(p, scope, itemType)
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "Cannot create dest dir %s: %v\n", destDir, err)
+			continue
+		}
+
+		fmt.Printf("\nSyncing to %s...\n", p)
+		syncResult, err := intsync.SyncItems(allItems, selectedSet, srcDir, destDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Sync error for %s: %v\n", p, err)
+			// Continue to next platform
+		} else {
+			totalLinked += syncResult.Linked
+			totalRemoved += syncResult.Removed
+		}
 	}
 
-	fmt.Printf("\nDone. Linked %d, removed %d %s in %s\n",
-		syncResult.Linked, syncResult.Removed, itemType, destDir)
+	fmt.Printf("\nDone. Linked %d, removed %d total %s across %d platform(s)\n",
+		totalLinked, totalRemoved, itemType, len(platforms))
 }

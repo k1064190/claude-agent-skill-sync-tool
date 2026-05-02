@@ -1,0 +1,83 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+)
+
+// Platform represents an AI agent platform.
+type Platform string
+
+const (
+	PlatformClaude   Platform = "Claude"
+	PlatformGemini   Platform = "Gemini"
+	PlatformCodex    Platform = "Codex"
+	PlatformOpencode Platform = "Opencode"
+)
+
+// AllPlatforms returns a list of all supported platforms.
+func AllPlatforms() []Platform {
+	return []Platform{PlatformClaude, PlatformGemini, PlatformCodex, PlatformOpencode}
+}
+
+// PlatformDestDir returns the destination directory for the given platform, scope, and item type.
+// It returns an absolute path using the user's home directory or the current working directory.
+func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
+	var base string
+	switch scope {
+	case ScopeProject:
+		cwd, err := os.Getwd()
+		if err != nil {
+			cwd = "."
+		}
+		base = cwd
+	default:
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = os.Getenv("HOME")
+		}
+		base = home
+	}
+
+	isTemplate := false
+	if itemType == "templates" {
+		itemType = ""
+		isTemplate = true
+	}
+
+	// For Project Scope templates, the destination is the project root itself
+	// (e.g. ./CLAUDE.md, ./GEMINI.md, ./AGENTS.md)
+	if scope == ScopeProject && isTemplate {
+		return filepath.Clean(base)
+	}
+
+	var dir string
+	switch platform {
+	case PlatformClaude:
+		dir = filepath.Join(base, ".claude", itemType)
+	case PlatformGemini:
+		if !isTemplate && itemType == "skills" {
+			// Gemini supports .agents/skills/ alias for interoperability
+			dir = filepath.Join(base, ".agents", itemType)
+		} else {
+			dir = filepath.Join(base, ".gemini", itemType)
+		}
+	case PlatformCodex:
+		if !isTemplate && itemType == "skills" {
+			// Codex standardizes on .agents/ directory for skills
+			dir = filepath.Join(base, ".agents", itemType)
+		} else {
+			dir = filepath.Join(base, ".codex", itemType)
+		}
+	case PlatformOpencode:
+		if scope == ScopeProject {
+			dir = filepath.Join(base, ".config", "opencode", itemType)
+		} else {
+			dir = filepath.Join(base, ".config", "opencode", itemType)
+		}
+	default:
+		// Unknown platform - return empty string to indicate failure or handled elsewhere
+		return ""
+	}
+	return filepath.Clean(dir)
+}
