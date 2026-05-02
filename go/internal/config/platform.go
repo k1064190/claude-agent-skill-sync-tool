@@ -52,7 +52,7 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 	case PlatformGemini:
 		dir = filepath.Join(base, ".gemini", itemType)
 	case PlatformCodex:
-		if !isTemplate && (itemType == "skills" || itemType == "agents") {
+		if !isTemplate && itemType == "skills" {
 			// Codex standardizes on .agents/ directory for skills
 			dir = filepath.Join(base, ".agents", itemType)
 		} else {
