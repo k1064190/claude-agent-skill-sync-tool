@@ -45,6 +45,12 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 		isTemplate = true
 	}
 
+	// For Project Scope templates, the destination is the project root itself
+	// (e.g. ./CLAUDE.md, ./GEMINI.md, ./AGENTS.md)
+	if scope == ScopeProject && isTemplate {
+		return filepath.Clean(base)
+	}
+
 	var dir string
 	switch platform {
 	case PlatformClaude:
