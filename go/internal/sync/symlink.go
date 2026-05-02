@@ -62,7 +62,8 @@ func SyncItems(allItems []string, selected map[string]bool, srcBase, destBase st
 				return res, fmt.Errorf("symlink %s -> %s: %w", dest, src, err)
 			}
 
-			fmt.Printf("  linked: %s\n", item)
+			absDest, _ := filepath.Abs(dest)
+			fmt.Printf("  linked: %s\n", absDest)
 			res.Linked++
 		} else {
 			// Only remove dest if it is a symlink pointing exactly to src.
@@ -75,7 +76,8 @@ func SyncItems(allItems []string, selected map[string]bool, srcBase, destBase st
 				if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
 					return res, fmt.Errorf("remove %s: %w", dest, err)
 				}
-				fmt.Printf("  removed: %s\n", item)
+				absDest, _ := filepath.Abs(dest)
+				fmt.Printf("  removed: %s\n", absDest)
 				res.Removed++
 			}
 		}

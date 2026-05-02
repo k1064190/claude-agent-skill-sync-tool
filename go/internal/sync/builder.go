@@ -61,7 +61,8 @@ func BuildTemplate(srcDir string, destDir string, platform config.Platform) (Res
 		if err := os.WriteFile(destPath, []byte(builder.String()), 0o644); err != nil {
 			return res, fmt.Errorf("write %s: %w", destPath, err)
 		}
-		fmt.Printf("  built: %s\n", targetFileName)
+		absDest, _ := filepath.Abs(destPath)
+		fmt.Printf("  built: %s\n", absDest)
 		res.Linked++ // Re-using Linked to indicate success
 	} else {
 		fmt.Printf("  skipped %s (no templates found)\n", targetFileName)

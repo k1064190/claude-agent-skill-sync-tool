@@ -154,7 +154,9 @@ func main() {
 	fmt.Printf("  Source : %s\n", srcDir)
 	fmt.Printf("  Targets:\n")
 	for _, p := range platforms {
-		fmt.Printf("    - [%s] %s\n", p, config.PlatformDestDir(p, scope, itemType))
+		dest := config.PlatformDestDir(p, scope, itemType)
+		absDest, _ := filepath.Abs(dest)
+		fmt.Printf("    - [%s] %s\n", p, absDest)
 	}
 	fmt.Println()
 
