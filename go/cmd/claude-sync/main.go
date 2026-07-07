@@ -109,29 +109,41 @@ func collectMdFiles(srcDir string) ([]string, error) {
 
 // --- Non-interactive maintenance modes ---
 
-// scanLinks counts, for the given items, how many destination entries are
-// symlinks pointing into srcDir and whether their target resolves on disk.
+// scanLinks walks destDir and counts every symlink that points into srcDir,
+// whether or not the linked item still exists in the source. Scanning the
+// destination (rather than the current source list) is what lets --status
+// report links whose source was deleted or renamed as broken.
 //
 // Returns:
 //
-//	linked (int): Symlinks into srcDir whose target exists.
+//	linked (int): Symlinks into srcDir whose target resolves on disk.
 //	broken (int): Symlinks into srcDir whose target is missing (dangling).
-func scanLinks(allItems []string, srcDir, destDir string) (linked, broken int) {
-	for _, item := range allItems {
-		dest := filepath.Join(destDir, item)
-		target, err := os.Readlink(dest)
+func scanLinks(srcDir, destDir string) (linked, broken int) {
+	_ = filepath.Walk(destDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil // tolerate unreadable entries; Walk won't descend symlinks
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return nil
+		}
+		target, err := os.Readlink(path)
 		if err != nil {
-			continue
+			return nil
 		}
-		if target != filepath.Join(srcDir, item) {
-			continue
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
 		}
-		if _, err := os.Stat(dest); err != nil {
+		rel, err := filepath.Rel(srcDir, target)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return nil // not a link into the sync source
+		}
+		if _, err := os.Stat(path); err != nil {
 			broken++
 		} else {
 			linked++
 		}
-	}
+		return nil
+	})
 	return linked, broken
 }
 
@@ -174,20 +186,9 @@ func runStatus(cfg *config.Config, scope config.Scope) {
 			continue
 		}
 
-		var allItems []string
-		var err error
-		if itemType == "skills" {
-			allItems, err = collectSkills(srcDir)
-		} else {
-			allItems, err = collectMdFiles(srcDir)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  scan error: %v\n", err)
-			continue
-		}
 		for _, p := range platforms {
 			destDir := config.PlatformDestDir(p, scope, itemType)
-			linked, broken := scanLinks(allItems, srcDir, destDir)
+			linked, broken := scanLinks(srcDir, destDir)
 			fmt.Printf("  %-12s linked=%-3d broken=%-3d %s\n", p, linked, broken, destDir)
 		}
 	}
@@ -209,13 +210,24 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 		}
 
 		if itemType == "templates" {
+			rebuilt := make(map[string]bool)
 			for _, p := range platforms {
 				destDir := config.PlatformDestDir(p, scope, itemType)
 				destPath := filepath.Join(destDir, intsync.TemplateTargetName(p))
-				// Only rebuild instruction files that already exist.
-				if _, err := os.Lstat(destPath); err != nil {
+				// Only rebuild an existing, regular instruction file. Skip
+				// missing files (preserve the prior selection), skip symlinks
+				// such as compatibility aliases (AGENTS.md -> CLAUDE.md), whose
+				// target would be clobbered by writing through them, and rebuild
+				// each concrete path only once (Codex and Opencode both resolve
+				// to ./AGENTS.md in project scope).
+				info, err := os.Lstat(destPath)
+				if err != nil || !info.Mode().IsRegular() {
 					continue
 				}
+				if rebuilt[destPath] {
+					continue
+				}
+				rebuilt[destPath] = true
 				res, err := intsync.BuildTemplate(srcDir, destDir, p)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  build error [%s]: %v\n", p, err)
