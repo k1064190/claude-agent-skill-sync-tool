@@ -16,12 +16,18 @@ func TestPlatformDestDir(t *testing.T) {
 		expected string // We will check if it ends with this
 	}{
 		{PlatformClaude, ScopeUser, "skills", filepath.Join(".claude", "skills")},
-		{PlatformGemini, ScopeUser, "skills", filepath.Join(".agents", "skills")},
+		// Antigravity user scope → global customization root ~/.gemini/config/.
+		{PlatformAntigravity, ScopeUser, "skills", filepath.Join(".gemini", "config", "skills")},
+		{PlatformAntigravity, ScopeUser, "rules", filepath.Join(".gemini", "config", "rules")},
+		{PlatformAntigravity, ScopeUser, "templates", ".gemini"},
+		// Antigravity project scope → workspace customization root .agents/.
+		{PlatformAntigravity, ScopeProject, "skills", filepath.Join(".agents", "skills")},
+		{PlatformAntigravity, ScopeProject, "rules", filepath.Join(".agents", "rules")},
 		{PlatformCodex, ScopeProject, "agents", filepath.Join(".codex", "agents")},
 		{PlatformOpencode, ScopeUser, "templates", filepath.Join(".config", "opencode")},
-		{PlatformClaude, ScopeProject, "templates", "."}, // Project root
-		{PlatformGemini, ScopeProject, "templates", "."}, // Project root
-		{PlatformCodex, ScopeProject, "templates", "."},  // Project root
+		{PlatformClaude, ScopeProject, "templates", "."},      // Project root
+		{PlatformAntigravity, ScopeProject, "templates", "."}, // Project root
+		{PlatformCodex, ScopeProject, "templates", "."},       // Project root
 	}
 
 	for _, tt := range tests {

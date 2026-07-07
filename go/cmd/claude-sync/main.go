@@ -107,9 +107,178 @@ func collectMdFiles(srcDir string) ([]string, error) {
 	return items, nil
 }
 
+// --- Non-interactive maintenance modes ---
+
+// scanLinks counts, for the given items, how many destination entries are
+// symlinks pointing into srcDir and whether their target resolves on disk.
+//
+// Returns:
+//
+//	linked (int): Symlinks into srcDir whose target exists.
+//	broken (int): Symlinks into srcDir whose target is missing (dangling).
+func scanLinks(allItems []string, srcDir, destDir string) (linked, broken int) {
+	for _, item := range allItems {
+		dest := filepath.Join(destDir, item)
+		target, err := os.Readlink(dest)
+		if err != nil {
+			continue
+		}
+		if target != filepath.Join(srcDir, item) {
+			continue
+		}
+		if _, err := os.Stat(dest); err != nil {
+			broken++
+		} else {
+			linked++
+		}
+	}
+	return linked, broken
+}
+
+// templateState compares freshly built template content against the installed
+// instruction file, returning "in-sync", "stale", or "missing".
+func templateState(content, destPath string) string {
+	data, err := os.ReadFile(destPath)
+	if os.IsNotExist(err) {
+		return "missing"
+	}
+	if err != nil {
+		return "error"
+	}
+	if string(data) == content {
+		return "in-sync"
+	}
+	return "stale"
+}
+
+// runStatus reports, for every platform and item type, how the destinations
+// compare to the source of truth. It never mutates the filesystem.
+func runStatus(cfg *config.Config, scope config.Scope) {
+	platforms := config.AllPlatforms()
+	for _, itemType := range config.ItemTypes {
+		srcDir := cfg.SourceDir(itemType)
+		if _, err := os.Stat(srcDir); err != nil {
+			continue
+		}
+		fmt.Printf("\n== %s ==\n", itemType)
+
+		if itemType == "templates" {
+			for _, p := range platforms {
+				content, target, err := intsync.BuildTemplateContent(srcDir, p)
+				if err != nil || content == "" {
+					continue
+				}
+				destPath := filepath.Join(config.PlatformDestDir(p, scope, itemType), target)
+				fmt.Printf("  %-12s %-8s %s\n", p, templateState(content, destPath), destPath)
+			}
+			continue
+		}
+
+		var allItems []string
+		var err error
+		if itemType == "skills" {
+			allItems, err = collectSkills(srcDir)
+		} else {
+			allItems, err = collectMdFiles(srcDir)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  scan error: %v\n", err)
+			continue
+		}
+		for _, p := range platforms {
+			destDir := config.PlatformDestDir(p, scope, itemType)
+			linked, broken := scanLinks(allItems, srcDir, destDir)
+			fmt.Printf("  %-12s linked=%-3d broken=%-3d %s\n", p, linked, broken, destDir)
+		}
+	}
+}
+
+// runRefresh re-applies the current sync state without prompting: it re-links
+// items that are already linked (repairing dangling links) and rebuilds
+// instruction files that already exist (repairing template drift). It never
+// adds new items or creates instruction files that were not present before, so
+// it preserves the user's earlier selections.
+func runRefresh(cfg *config.Config, scope config.Scope) {
+	platforms := config.AllPlatforms()
+	totalLinked, totalRebuilt := 0, 0
+
+	for _, itemType := range config.ItemTypes {
+		srcDir := cfg.SourceDir(itemType)
+		if _, err := os.Stat(srcDir); err != nil {
+			continue
+		}
+
+		if itemType == "templates" {
+			for _, p := range platforms {
+				destDir := config.PlatformDestDir(p, scope, itemType)
+				destPath := filepath.Join(destDir, intsync.TemplateTargetName(p))
+				// Only rebuild instruction files that already exist.
+				if _, err := os.Lstat(destPath); err != nil {
+					continue
+				}
+				res, err := intsync.BuildTemplate(srcDir, destDir, p)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  build error [%s]: %v\n", p, err)
+					continue
+				}
+				totalRebuilt += res.Built
+			}
+			continue
+		}
+
+		var allItems []string
+		var err error
+		if itemType == "skills" {
+			allItems, err = collectSkills(srcDir)
+		} else {
+			allItems, err = collectMdFiles(srcDir)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  scan error [%s]: %v\n", itemType, err)
+			continue
+		}
+		for _, p := range platforms {
+			destDir := config.PlatformDestDir(p, scope, itemType)
+			existing := config.ExistingSymlinks(allItems, srcDir, destDir)
+			if len(existing) == 0 {
+				continue
+			}
+			res, err := intsync.SyncItems(allItems, existing, srcDir, destDir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  relink error [%s/%s]: %v\n", p, itemType, err)
+				continue
+			}
+			totalLinked += res.Linked
+		}
+	}
+
+	fmt.Printf("\nRefresh complete. Re-linked %d item(s), rebuilt %d template(s).\n", totalLinked, totalRebuilt)
+}
+
 // --- Main ---
 
 func main() {
+	// --- Flag parsing (non-interactive maintenance modes) ---
+	var doStatus, doRefresh bool
+	scope := config.ScopeUser
+	for _, arg := range os.Args[1:] {
+		switch arg {
+		case "--status", "-s":
+			doStatus = true
+		case "--refresh", "-r":
+			doRefresh = true
+		case "--project", "-p":
+			scope = config.ScopeProject
+		case "--help", "-h":
+			fmt.Println("Usage: claude-sync [--status|-s] [--refresh|-r] [--project|-p]")
+			fmt.Println("  (no flags)   interactive sync")
+			fmt.Println("  --status     report drift across platforms without changing anything")
+			fmt.Println("  --refresh    re-link existing items and rebuild existing templates")
+			fmt.Println("  --project    operate on project scope (./) instead of user scope (~/)")
+			os.Exit(0)
+		}
+	}
+
 	// --- Title & Config ---
 	config.PrintTitle()
 
@@ -120,11 +289,24 @@ func main() {
 	}
 
 	if cfg == nil {
+		if doStatus || doRefresh {
+			fmt.Fprintln(os.Stderr, "No config found. Run claude-sync once interactively first.")
+			os.Exit(1)
+		}
 		cfg, err = config.RunSetup()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Setup error: %v\n", err)
 			os.Exit(1)
 		}
+	}
+
+	if doStatus {
+		runStatus(cfg, scope)
+		os.Exit(0)
+	}
+	if doRefresh {
+		runRefresh(cfg, scope)
+		os.Exit(0)
 	}
 
 	// --- Platform Selection ---
@@ -139,7 +321,7 @@ func main() {
 	}
 
 	// --- Scope Selection ---
-	scope, cfg, err := config.SelectScope(cfg)
+	scope, cfg, err = config.SelectScope(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -185,7 +367,7 @@ func main() {
 		if scope == config.ScopeProject {
 			cwd, _ := os.Getwd()
 			files := []string{"CLAUDE.md", "AGENTS.md", "GEMINI.md"}
-			
+
 			// Find existing real files among the set
 			var existingReal []string
 			for _, f := range files {

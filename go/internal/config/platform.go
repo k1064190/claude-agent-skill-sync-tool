@@ -9,15 +9,15 @@ import (
 type Platform string
 
 const (
-	PlatformClaude   Platform = "Claude"
-	PlatformGemini   Platform = "Gemini"
-	PlatformCodex    Platform = "Codex"
-	PlatformOpencode Platform = "Opencode"
+	PlatformClaude      Platform = "Claude"
+	PlatformAntigravity Platform = "Antigravity"
+	PlatformCodex       Platform = "Codex"
+	PlatformOpencode    Platform = "Opencode"
 )
 
 // AllPlatforms returns a list of all supported platforms.
 func AllPlatforms() []Platform {
-	return []Platform{PlatformClaude, PlatformGemini, PlatformCodex, PlatformOpencode}
+	return []Platform{PlatformClaude, PlatformAntigravity, PlatformCodex, PlatformOpencode}
 }
 
 // PlatformDestDir returns the destination directory for the given platform, scope, and item type.
@@ -55,12 +55,19 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 	switch platform {
 	case PlatformClaude:
 		dir = filepath.Join(base, ".claude", itemType)
-	case PlatformGemini:
-		if !isTemplate && itemType == "skills" {
-			// Gemini supports .agents/skills/ alias for interoperability
+	case PlatformAntigravity:
+		// Antigravity (agy) discovery locations: the workspace customization
+		// root is .agents/ (project scope), and the global customization root
+		// is ~/.gemini/config/ (user scope).
+		switch {
+		case isTemplate:
+			// User-scope instruction file → ~/.gemini/GEMINI.md.
+			// (Project-scope templates already returned at the project root.)
+			dir = filepath.Join(base, ".gemini")
+		case scope == ScopeProject:
 			dir = filepath.Join(base, ".agents", itemType)
-		} else {
-			dir = filepath.Join(base, ".gemini", itemType)
+		default:
+			dir = filepath.Join(base, ".gemini", "config", itemType)
 		}
 	case PlatformCodex:
 		if !isTemplate && itemType == "skills" {

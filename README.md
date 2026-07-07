@@ -73,7 +73,7 @@ Choose one or more platforms to sync to:
   Which platforms would you like to sync to?
 
   [x] Claude
-  [x] Gemini
+  [x] Antigravity
   [ ] Codex
   [ ] Opencode
 
@@ -117,10 +117,14 @@ For `skills`, `agents`, and `rules`, use the interactive TUI to pick items. The 
 
 ## Target Path Mapping
 
+Paths below are for **User scope**. In **Project scope**, Antigravity routes all
+items under the workspace root `./.agents/` (e.g. `./.agents/skills`), matching
+`agy`'s workspace discovery.
+
 | Platform | Skills Path | Agent/Rule Path | Config File |
 | --- | --- | --- | --- |
 | **Claude** | `~/.claude/skills` | `~/.claude/agents` | `CLAUDE.md` |
-| **Gemini** | `~/.agents/skills` | `~/.gemini/agents` | `GEMINI.md` |
+| **Antigravity** | `~/.gemini/config/skills` | `~/.gemini/config/agents` | `GEMINI.md` |
 | **Codex** | `~/.agents/skills` | `~/.codex/agents` | `AGENTS.md` |
 | **Opencode** | `~/.config/opencode/skills` | `~/.config/opencode/agents` | `AGENTS.md` |
 
