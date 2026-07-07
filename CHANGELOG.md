@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-07-07
+
+### Added
+
+- First-class **Antigravity** (`agy`) platform, routing to agy's real discovery
+  locations: user scope `~/.gemini/config/<type>` and project scope `./.agents/<type>`
+- `claude-sync --status` — non-interactive per-platform drift report (linked/broken
+  counts for items; `in-sync`/`stale`/`missing` for templates); read-only
+- `claude-sync --refresh` — idempotent, non-interactive re-link of existing items
+  and rebuild of existing instruction files; preserves prior selections
+- `claude-sync --project` / `-p` — select project scope for `--status`/`--refresh`
+- `BuildTemplateContent` / `TemplateTargetName` helpers for pure template building
+
+### Changed
+
+- Instruction file build now shares a pure content builder between write and compare paths
+
+### Removed
+
+- `Gemini` platform (superseded by Antigravity; Gemini CLI's free tier was retired)
+
 ## [0.1.1.0] - 2026-03-28
 
 ### Added
