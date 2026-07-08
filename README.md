@@ -121,6 +121,12 @@ Paths below are for **User scope**. In **Project scope**, Antigravity routes all
 items under the workspace root `./.agents/` (e.g. `./.agents/skills`), matching
 `agy`'s workspace discovery.
 
+> **Known limitation:** Antigravity user-scope `rules` are synced to
+> `~/.gemini/config/rules`, but `agy` documents global rules as a single
+> `~/.gemini/GEMINI.md` file (only workspace rules use `.agents/rules`). Until
+> that is verified against a live `agy` run, user-scope `rules` for Antigravity
+> may not be loaded. Project-scope rules (`.agents/rules`) are unaffected.
+
 | Platform | Skills Path | Agent/Rule Path | Config File |
 | --- | --- | --- | --- |
 | **Claude** | `~/.claude/skills` | `~/.claude/agents` | `CLAUDE.md` |

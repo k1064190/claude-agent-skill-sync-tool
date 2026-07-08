@@ -228,6 +228,23 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 					continue
 				}
 				rebuilt[destPath] = true
+
+				// Skip when already in sync, and back up the existing file
+				// before overwriting so a hand-authored instruction file is
+				// never silently destroyed.
+				newContent, _, cerr := intsync.BuildTemplateContent(srcDir, p)
+				cur, _ := os.ReadFile(destPath)
+				if cerr == nil && string(cur) == newContent {
+					continue
+				}
+				if len(cur) > 0 {
+					if err := os.WriteFile(destPath+".bak", cur, 0o644); err != nil {
+						fmt.Fprintf(os.Stderr, "  backup error [%s]: %v\n", p, err)
+					} else {
+						fmt.Printf("  backed up: %s.bak\n", destPath)
+					}
+				}
+
 				res, err := intsync.BuildTemplate(srcDir, destDir, p)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  build error [%s]: %v\n", p, err)
