@@ -194,6 +194,88 @@ func runStatus(cfg *config.Config, scope config.Scope) {
 	}
 }
 
+// refreshTemplates rebuilds existing instruction files from their templates,
+// preserving prior selections. Platforms are grouped by their resolved
+// instruction-file path (Codex and Opencode share ./AGENTS.md in project
+// scope). For each path it:
+//   - skips missing files and symlinks (e.g. compatibility aliases), which are
+//     not tool-owned regular files;
+//   - skips a path reached by multiple platforms whose built contents differ,
+//     since refresh cannot tell which platform owns the file;
+//   - skips a path already in sync;
+//   - backs up the existing file to <path>.bak before overwriting, and aborts
+//     that rebuild if the backup cannot be written.
+//
+// Returns the number of instruction files rebuilt.
+func refreshTemplates(srcDir string, scope config.Scope, platforms []config.Platform) int {
+	// Group platforms by destination path, tracking the distinct built
+	// contents that map there and one platform able to produce each path.
+	type group struct {
+		contents map[string]bool
+		sample   config.Platform
+	}
+	groups := make(map[string]*group)
+	var order []string
+	for _, p := range platforms {
+		destPath := filepath.Join(config.PlatformDestDir(p, scope, "templates"), intsync.TemplateTargetName(p))
+		content, _, cerr := intsync.BuildTemplateContent(srcDir, p)
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "  build error [%s]: %v\n", p, cerr)
+			continue
+		}
+		if content == "" {
+			continue // no template source for this platform
+		}
+		g, ok := groups[destPath]
+		if !ok {
+			g = &group{contents: make(map[string]bool)}
+			groups[destPath] = g
+			order = append(order, destPath)
+		}
+		g.contents[content] = true
+		g.sample = p
+	}
+
+	rebuilt := 0
+	for _, destPath := range order {
+		g := groups[destPath]
+
+		info, err := os.Lstat(destPath)
+		if err != nil || !info.Mode().IsRegular() {
+			continue // missing / symlink alias — preserve as-is
+		}
+		if len(g.contents) > 1 {
+			fmt.Fprintf(os.Stderr, "  skipped %s (ambiguous shared target; multiple platforms)\n", destPath)
+			continue
+		}
+
+		var newContent string
+		for c := range g.contents {
+			newContent = c
+		}
+		cur, _ := os.ReadFile(destPath)
+		if string(cur) == newContent {
+			continue // already in sync
+		}
+		if len(cur) > 0 {
+			if err := os.WriteFile(destPath+".bak", cur, 0o644); err != nil {
+				fmt.Fprintf(os.Stderr, "  skipped %s (backup failed: %v)\n", destPath, err)
+				continue
+			}
+			fmt.Printf("  backed up: %s.bak\n", destPath)
+		}
+
+		destDir := config.PlatformDestDir(g.sample, scope, "templates")
+		res, err := intsync.BuildTemplate(srcDir, destDir, g.sample)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  build error [%s]: %v\n", g.sample, err)
+			continue
+		}
+		rebuilt += res.Built
+	}
+	return rebuilt
+}
+
 // runRefresh re-applies the current sync state without prompting: it re-links
 // items that are already linked (repairing dangling links) and rebuilds
 // instruction files that already exist (repairing template drift). It never
@@ -210,48 +292,7 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 		}
 
 		if itemType == "templates" {
-			rebuilt := make(map[string]bool)
-			for _, p := range platforms {
-				destDir := config.PlatformDestDir(p, scope, itemType)
-				destPath := filepath.Join(destDir, intsync.TemplateTargetName(p))
-				// Only rebuild an existing, regular instruction file. Skip
-				// missing files (preserve the prior selection), skip symlinks
-				// such as compatibility aliases (AGENTS.md -> CLAUDE.md), whose
-				// target would be clobbered by writing through them, and rebuild
-				// each concrete path only once (Codex and Opencode both resolve
-				// to ./AGENTS.md in project scope).
-				info, err := os.Lstat(destPath)
-				if err != nil || !info.Mode().IsRegular() {
-					continue
-				}
-				if rebuilt[destPath] {
-					continue
-				}
-				rebuilt[destPath] = true
-
-				// Skip when already in sync, and back up the existing file
-				// before overwriting so a hand-authored instruction file is
-				// never silently destroyed.
-				newContent, _, cerr := intsync.BuildTemplateContent(srcDir, p)
-				cur, _ := os.ReadFile(destPath)
-				if cerr == nil && string(cur) == newContent {
-					continue
-				}
-				if len(cur) > 0 {
-					if err := os.WriteFile(destPath+".bak", cur, 0o644); err != nil {
-						fmt.Fprintf(os.Stderr, "  backup error [%s]: %v\n", p, err)
-					} else {
-						fmt.Printf("  backed up: %s.bak\n", destPath)
-					}
-				}
-
-				res, err := intsync.BuildTemplate(srcDir, destDir, p)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "  build error [%s]: %v\n", p, err)
-					continue
-				}
-				totalRebuilt += res.Built
-			}
+			totalRebuilt += refreshTemplates(srcDir, scope, platforms)
 			continue
 		}
 
