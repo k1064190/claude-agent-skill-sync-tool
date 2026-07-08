@@ -253,7 +253,13 @@ func refreshTemplates(srcDir string, scope config.Scope, platforms []config.Plat
 		for c := range g.contents {
 			newContent = c
 		}
-		cur, _ := os.ReadFile(destPath)
+		cur, rerr := os.ReadFile(destPath)
+		if rerr != nil {
+			// Regular file (checked above) that cannot be read: refuse to
+			// overwrite it without being able to back it up first.
+			fmt.Fprintf(os.Stderr, "  skipped %s (cannot read to back up: %v)\n", destPath, rerr)
+			continue
+		}
 		if string(cur) == newContent {
 			continue // already in sync
 		}
@@ -276,6 +282,41 @@ func refreshTemplates(srcDir string, scope config.Scope, platforms []config.Plat
 	return rebuilt
 }
 
+// removeDanglingLinks deletes symlinks under destDir that point into srcDir but
+// whose target no longer resolves (the source item was deleted or renamed).
+// These are the broken links --status reports; refresh cleans them so the two
+// commands stay consistent. Returns the number removed.
+func removeDanglingLinks(srcDir, destDir string) int {
+	removed := 0
+	_ = filepath.Walk(destDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return nil
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			return nil
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		rel, err := filepath.Rel(srcDir, target)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return nil // not a link into the sync source
+		}
+		if _, statErr := os.Stat(path); statErr != nil {
+			if rmErr := os.Remove(path); rmErr == nil {
+				fmt.Printf("  removed broken: %s\n", path)
+				removed++
+			}
+		}
+		return nil
+	})
+	return removed
+}
+
 // runRefresh re-applies the current sync state without prompting: it re-links
 // items that are already linked (repairing dangling links) and rebuilds
 // instruction files that already exist (repairing template drift). It never
@@ -283,7 +324,7 @@ func refreshTemplates(srcDir string, scope config.Scope, platforms []config.Plat
 // it preserves the user's earlier selections.
 func runRefresh(cfg *config.Config, scope config.Scope) {
 	platforms := config.AllPlatforms()
-	totalLinked, totalRebuilt := 0, 0
+	totalLinked, totalRemoved, totalRebuilt := 0, 0, 0
 
 	for _, itemType := range config.ItemTypes {
 		srcDir := cfg.SourceDir(itemType)
@@ -309,6 +350,7 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 		}
 		for _, p := range platforms {
 			destDir := config.PlatformDestDir(p, scope, itemType)
+			totalRemoved += removeDanglingLinks(srcDir, destDir)
 			existing := config.ExistingSymlinks(allItems, srcDir, destDir)
 			if len(existing) == 0 {
 				continue
@@ -322,7 +364,8 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 		}
 	}
 
-	fmt.Printf("\nRefresh complete. Re-linked %d item(s), rebuilt %d template(s).\n", totalLinked, totalRebuilt)
+	fmt.Printf("\nRefresh complete. Re-linked %d item(s), removed %d broken link(s), rebuilt %d template(s).\n",
+		totalLinked, totalRemoved, totalRebuilt)
 }
 
 // --- Main ---

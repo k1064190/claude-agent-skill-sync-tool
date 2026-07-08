@@ -25,14 +25,19 @@ func TemplateTargetName(platform config.Platform) string {
 }
 
 // templateSourceFile returns the platform-specific override markdown file name
-// under the templates source directory.
-func templateSourceFile(platform config.Platform) string {
+// under the templates source directory. srcDir is used to resolve fallbacks
+// where more than one override name is accepted.
+func templateSourceFile(srcDir string, platform config.Platform) string {
 	switch platform {
 	case config.PlatformClaude:
 		return "claude.md"
 	case config.PlatformAntigravity:
-		// Antigravity (agy) reads GEMINI.md; the source override still lives in
-		// templates/gemini.md.
+		// Antigravity (agy) reads GEMINI.md. Prefer a platform-named
+		// templates/antigravity.md override, falling back to the legacy
+		// templates/gemini.md when the former is absent.
+		if _, err := os.Stat(filepath.Join(srcDir, "antigravity.md")); err == nil {
+			return "antigravity.md"
+		}
 		return "gemini.md"
 	case config.PlatformCodex:
 		return "codex.md"
@@ -60,7 +65,7 @@ func BuildTemplateContent(srcDir string, platform config.Platform) (string, stri
 	}
 
 	commonFile := filepath.Join(srcDir, "common.md")
-	platformFile := filepath.Join(srcDir, templateSourceFile(platform))
+	platformFile := filepath.Join(srcDir, templateSourceFile(srcDir, platform))
 
 	var builder strings.Builder
 

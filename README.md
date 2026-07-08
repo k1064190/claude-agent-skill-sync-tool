@@ -121,6 +121,11 @@ Paths below are for **User scope**. In **Project scope**, Antigravity routes all
 items under the workspace root `./.agents/` (e.g. `./.agents/skills`), matching
 `agy`'s workspace discovery.
 
+> **Known limitation:** Antigravity and Codex do not load Markdown persona
+> `agents` — those are only consumed by Claude and Opencode. Selecting
+> `agents` for Antigravity/Codex creates links the tool reports as synced but
+> those platforms ignore them.
+>
 > **Known limitation:** Antigravity user-scope `rules` are synced to
 > `~/.gemini/config/rules`, but `agy` documents global rules as a single
 > `~/.gemini/GEMINI.md` file (only workspace rules use `.agents/rules`). Until
