@@ -65,6 +65,10 @@ The tool asks for a **source root** containing your assets.
 └── templates/        # Configuration templates (common.md + platform.md)
 ```
 
+Entries under `skills/` (and the other item directories) may be **symlinks into
+cloned repositories** — see [Recommended layout](#recommended-layout-repos--symlinks)
+below. Discovery follows them like regular directories.
+
 ### 2. Platform Selection
 
 Choose one or more platforms to sync to:
@@ -101,6 +105,35 @@ In Project Scope, if only one instruction file is generated, `claude-sync` autom
 For `skills`, `agents`, and `rules`, use the interactive TUI to pick items. The tool will then:
 - Create symlinks in the target directories.
 - Use absolute paths in output for clear visibility.
+
+## Recommended Layout: Repos → Symlinks
+
+Keep every skill in a git repository and make the source root a pure curation
+layer of symlinks. Updates then flow through the symlink chain with a single
+`git pull` — no re-copying, no re-syncing:
+
+```
+~/projects/<repo>                    # clones: external collections + your own skills repo
+        │  ln -s                     #   (curation: pick which skills are sync candidates)
+<source-root>/skills/<name>          # symlink → repo skill
+        │  claude-sync               #   (selection: pick which candidates are active)
+~/.claude/skills, ~/.gemini/config/skills, ...
+```
+
+To update everything at once:
+
+```bash
+claude-sync --update
+```
+
+## Maintenance Commands
+
+| Flag | Effect |
+| --- | --- |
+| `--status` / `-s` | Read-only drift report: linked/broken link counts per platform, `in-sync`/`stale`/`missing` per instruction file. |
+| `--refresh` / `-r` | Idempotent repair: re-link existing items, remove dangling tool-owned links, rebuild existing instruction files (backing up to `<file>.bak` first). Never adds new items. |
+| `--update` / `-u` | `git pull --ff-only` every repository referenced by symlinks under the source root. Combine with `--status`/`--refresh` in one invocation. |
+| `--project` / `-p` | Operate on project scope (`./`) instead of user scope (`~/`). |
 
 ## TUI Controls
 
