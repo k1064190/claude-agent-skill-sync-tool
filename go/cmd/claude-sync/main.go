@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,14 +36,41 @@ var supportDirs = map[string]bool{
 // collectSkills discovers leaf skill directories under srcDir.
 func collectSkills(srcDir string) ([]string, error) {
 	var skills []string
-	if _, err := findLeafSkills(srcDir, srcDir, &skills); err != nil {
+	if _, err := findLeafSkills(srcDir, srcDir, &skills, make(map[string]bool)); err != nil {
 		return nil, err
 	}
 	sort.Strings(skills)
 	return skills, nil
 }
 
-func findLeafSkills(baseDir, dir string, skills *[]string) (bool, error) {
+// isDirEntry reports whether e names a directory, following a symlink to a
+// directory so that skills registered in the source tree as links to external
+// repos are discovered like regular directories.
+func isDirEntry(dir string, e os.DirEntry) bool {
+	if e.IsDir() {
+		return true
+	}
+	if e.Type()&os.ModeSymlink == 0 {
+		return false
+	}
+	st, err := os.Stat(filepath.Join(dir, e.Name()))
+	return err == nil && st.IsDir()
+}
+
+// findLeafSkills recursively collects leaf skill directories. visited holds
+// canonical (symlink-resolved) paths already traversed, so a symlink pointing
+// back at an ancestor (e.g. skills/self -> skills) terminates instead of
+// recursing forever; a directory reachable via two links is collected once.
+func findLeafSkills(baseDir, dir string, skills *[]string, visited map[string]bool) (bool, error) {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false, err
+	}
+	if visited[real] {
+		return false, nil
+	}
+	visited[real] = true
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false, err
@@ -50,7 +78,7 @@ func findLeafSkills(baseDir, dir string, skills *[]string) (bool, error) {
 
 	hasSubSkill := false
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !isDirEntry(dir, e) {
 			continue
 		}
 		name := e.Name()
@@ -58,7 +86,7 @@ func findLeafSkills(baseDir, dir string, skills *[]string) (bool, error) {
 			continue
 		}
 		child := filepath.Join(dir, name)
-		childIsSkill, err := findLeafSkills(baseDir, child, skills)
+		childIsSkill, err := findLeafSkills(baseDir, child, skills, visited)
 		if err != nil {
 			return false, err
 		}
@@ -282,6 +310,87 @@ func refreshTemplates(srcDir string, scope config.Scope, platforms []config.Plat
 	return rebuilt
 }
 
+// linkedRepos scans the given source directories for symlinks and resolves
+// each target to the root of the git repository containing it (the nearest
+// ancestor holding a .git entry). Symlinks whose targets live outside any git
+// repository are ignored. Results are deduplicated and sorted.
+//
+// Args:
+//
+//	dirs ([]string): Absolute paths of source directories to scan.
+//
+// Returns:
+//
+//	repos ([]string): Sorted, unique git repository roots.
+func linkedRepos(dirs []string) []string {
+	seen := make(map[string]bool)
+	for _, dir := range dirs {
+		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info == nil || info.Mode()&os.ModeSymlink == 0 {
+				return nil
+			}
+			target, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return nil // dangling link
+			}
+			for p := target; ; {
+				if _, err := os.Lstat(filepath.Join(p, ".git")); err == nil {
+					seen[p] = true
+					break
+				}
+				parent := filepath.Dir(p)
+				if parent == p {
+					break // reached filesystem root: not inside a repo
+				}
+				p = parent
+			}
+			return nil
+		})
+	}
+	repos := make([]string, 0, len(seen))
+	for r := range seen {
+		repos = append(repos, r)
+	}
+	sort.Strings(repos)
+	return repos
+}
+
+// runUpdate git-pulls every repository referenced by symlinks under the source
+// root, so all externally cloned skills/agents/rules update in one command.
+// Because the source and platform layers are symlinks, pulled changes are
+// immediately live everywhere without re-syncing.
+func runUpdate(cfg *config.Config) {
+	var dirs []string
+	for _, t := range config.ItemTypes {
+		d := cfg.SourceDir(t)
+		if _, err := os.Stat(d); err == nil {
+			dirs = append(dirs, d)
+		}
+	}
+
+	repos := linkedRepos(dirs)
+	if len(repos) == 0 {
+		fmt.Println("  No linked repositories found under the source root.")
+		return
+	}
+
+	failed := 0
+	for _, repo := range repos {
+		out, err := exec.Command("git", "-C", repo, "pull", "--ff-only").CombinedOutput()
+		summary := strings.TrimSpace(string(out))
+		if i := strings.IndexByte(summary, '\n'); i >= 0 {
+			summary = summary[:i]
+		}
+		if err != nil {
+			failed++
+			fmt.Fprintf(os.Stderr, "  FAIL %s: %s\n", repo, summary)
+			continue
+		}
+		fmt.Printf("  %s: %s\n", repo, summary)
+	}
+	fmt.Printf("\nUpdate complete. Pulled %d repo(s), %d failed.\n", len(repos)-failed, failed)
+}
+
 // removeDanglingLinks deletes symlinks under destDir that point into srcDir but
 // whose target no longer resolves (the source item was deleted or renamed).
 // These are the broken links --status reports; refresh cleans them so the two
@@ -372,7 +481,7 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 
 func main() {
 	// --- Flag parsing (non-interactive maintenance modes) ---
-	var doStatus, doRefresh bool
+	var doStatus, doRefresh, doUpdate bool
 	scope := config.ScopeUser
 	for _, arg := range os.Args[1:] {
 		switch arg {
@@ -380,13 +489,16 @@ func main() {
 			doStatus = true
 		case "--refresh", "-r":
 			doRefresh = true
+		case "--update", "-u":
+			doUpdate = true
 		case "--project", "-p":
 			scope = config.ScopeProject
 		case "--help", "-h":
-			fmt.Println("Usage: claude-sync [--status|-s] [--refresh|-r] [--project|-p]")
+			fmt.Println("Usage: claude-sync [--status|-s] [--refresh|-r] [--update|-u] [--project|-p]")
 			fmt.Println("  (no flags)   interactive sync")
 			fmt.Println("  --status     report drift across platforms without changing anything")
 			fmt.Println("  --refresh    re-link existing items and rebuild existing templates")
+			fmt.Println("  --update     git-pull every repo referenced by symlinks in the source root")
 			fmt.Println("  --project    operate on project scope (./) instead of user scope (~/)")
 			os.Exit(0)
 		}
@@ -402,7 +514,7 @@ func main() {
 	}
 
 	if cfg == nil {
-		if doStatus || doRefresh {
+		if doStatus || doRefresh || doUpdate {
 			fmt.Fprintln(os.Stderr, "No config found. Run claude-sync once interactively first.")
 			os.Exit(1)
 		}
@@ -413,6 +525,13 @@ func main() {
 		}
 	}
 
+	if doUpdate {
+		runUpdate(cfg)
+		// --update composes with --status/--refresh in one invocation.
+		if !doStatus && !doRefresh {
+			os.Exit(0)
+		}
+	}
 	if doStatus {
 		runStatus(cfg, scope)
 		os.Exit(0)

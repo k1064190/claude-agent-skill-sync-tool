@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-07-10
+
+### Added
+
+- Skill discovery follows **symlinked directories**, so the source root can be a
+  pure curation layer of links into cloned skill repositories
+- `claude-sync --update` / `-u` — `git pull --ff-only` every repository
+  referenced by symlinks under the source root; composes with
+  `--status`/`--refresh` in one invocation
+- README: recommended repos → symlinks layout and a Maintenance Commands table
+  (documents `--status`/`--refresh` introduced in 0.5.0)
+
 ## [0.5.0] - 2026-07-07
 
 ### Added
