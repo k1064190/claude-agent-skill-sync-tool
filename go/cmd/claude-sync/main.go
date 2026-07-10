@@ -36,7 +36,7 @@ var supportDirs = map[string]bool{
 // collectSkills discovers leaf skill directories under srcDir.
 func collectSkills(srcDir string) ([]string, error) {
 	var skills []string
-	if _, err := findLeafSkills(srcDir, srcDir, &skills); err != nil {
+	if _, err := findLeafSkills(srcDir, srcDir, &skills, make(map[string]bool)); err != nil {
 		return nil, err
 	}
 	sort.Strings(skills)
@@ -57,7 +57,20 @@ func isDirEntry(dir string, e os.DirEntry) bool {
 	return err == nil && st.IsDir()
 }
 
-func findLeafSkills(baseDir, dir string, skills *[]string) (bool, error) {
+// findLeafSkills recursively collects leaf skill directories. visited holds
+// canonical (symlink-resolved) paths already traversed, so a symlink pointing
+// back at an ancestor (e.g. skills/self -> skills) terminates instead of
+// recursing forever; a directory reachable via two links is collected once.
+func findLeafSkills(baseDir, dir string, skills *[]string, visited map[string]bool) (bool, error) {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false, err
+	}
+	if visited[real] {
+		return false, nil
+	}
+	visited[real] = true
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false, err
@@ -73,7 +86,7 @@ func findLeafSkills(baseDir, dir string, skills *[]string) (bool, error) {
 			continue
 		}
 		child := filepath.Join(dir, name)
-		childIsSkill, err := findLeafSkills(baseDir, child, skills)
+		childIsSkill, err := findLeafSkills(baseDir, child, skills, visited)
 		if err != nil {
 			return false, err
 		}

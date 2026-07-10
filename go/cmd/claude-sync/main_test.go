@@ -43,6 +43,30 @@ func TestCollectSkillsFollowsSymlinks(t *testing.T) {
 	}
 }
 
+// TestCollectSkillsSymlinkCycle verifies that a symlink pointing back at an
+// ancestor directory does not cause unbounded recursion; discovery must
+// terminate and still return the real skills.
+func TestCollectSkillsSymlinkCycle(t *testing.T) {
+	tempDir := t.TempDir()
+
+	srcDir := filepath.Join(tempDir, "skills")
+	if err := os.MkdirAll(filepath.Join(srcDir, "real-skill"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Self-referential cycle: skills/self -> skills.
+	if err := os.Symlink(srcDir, filepath.Join(srcDir, "self")); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := collectSkills(srcDir)
+	if err != nil {
+		t.Fatalf("collectSkills: %v", err)
+	}
+	if len(skills) != 1 || skills[0] != "real-skill" {
+		t.Errorf("collectSkills = %v; want [real-skill]", skills)
+	}
+}
+
 // TestLinkedRepos verifies that symlinks in the source tree are resolved to
 // the git repository roots containing their targets, deduplicated.
 func TestLinkedRepos(t *testing.T) {
