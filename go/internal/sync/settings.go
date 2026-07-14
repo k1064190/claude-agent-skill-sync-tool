@@ -208,9 +208,16 @@ func CaptureSettings(srcDir, destDir string, platform config.Platform) (Result, 
 		return res, fmt.Errorf("read settings fragment: %w", err)
 	}
 
-	live, _, err := readSettings(filepath.Join(destDir, target))
+	livePath := filepath.Join(destDir, target)
+	live, _, exists, err := readSettings(livePath)
 	if err != nil {
 		return res, fmt.Errorf("read live settings: %w", err)
+	}
+	if !exists {
+		// Refuse rather than treating an absent file as an empty settings object:
+		// every owned key would look removed and the fragment would be blanked,
+		// destroying the version-controlled plugin declarations.
+		return res, fmt.Errorf("live settings %s does not exist; nothing to capture", livePath)
 	}
 
 	captured, changed, err := CaptureSettingsContent(live, fragment)
@@ -221,7 +228,9 @@ func CaptureSettings(srcDir, destDir string, platform config.Platform) (Result, 
 		return res, nil
 	}
 
-	if err := os.WriteFile(fragPath, captured, 0o644); err != nil {
+	// Atomic: a truncated fragment would lose the very key set that tells a
+	// later capture what it owns, and could not be reconstructed from the live file.
+	if err := writeFileAtomic(fragPath, captured, 0o644); err != nil {
 		return res, fmt.Errorf("write %s: %w", fragPath, err)
 	}
 
@@ -230,28 +239,111 @@ func CaptureSettings(srcDir, destDir string, platform config.Platform) (Result, 
 	return res, nil
 }
 
-// readSettings reads the live settings file, treating "not found" as empty.
-// It also reports the file's permission bits so a rewrite can preserve them.
-func readSettings(path string) (content []byte, mode os.FileMode, err error) {
+// SettingsFragmentExists reports whether a fragment is declared for the platform
+// in srcDir, so callers can distinguish "nothing to apply" from "already applied".
+func SettingsFragmentExists(srcDir string, platform config.Platform) bool {
+	name := SettingsSourceFile(platform)
+	if name == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(srcDir, name))
+	return err == nil
+}
+
+// readSettings reads the live settings file. A missing file is not an error —
+// it is reported via exists, because the two callers must treat it differently:
+// injection creates the file, while capture must refuse to run (an absent live
+// file would look like "every owned key was removed" and blank the fragment).
+//
+// Returns:
+//
+//	content ([]byte):      File content, nil when absent.
+//	mode    (os.FileMode): Existing permission bits, or 0600 for a file we would create.
+//	exists  (bool):        Whether the file is present.
+//	err     (error):       Read error other than "not found", or nil.
+func readSettings(path string) (content []byte, mode os.FileMode, exists bool, err error) {
 	// Settings can hold tokens and machine config, so a file we create is
 	// owner-only. An existing file keeps whatever mode it already has — the
 	// tool owns certain keys, not the file's permissions.
 	mode = 0o600
-	info, err := os.Stat(path)
-	if err == nil {
-		mode = info.Mode().Perm()
-	} else if !os.IsNotExist(err) {
-		return nil, mode, err
-	}
 
 	content, err = os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, mode, nil
+			return nil, mode, false, nil
 		}
-		return nil, mode, err
+		return nil, mode, false, err
 	}
-	return content, mode, nil
+
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+	return content, mode, true, nil
+}
+
+// resolveSettingsPath follows a symlinked settings file to the path that should
+// actually be written. Unlike filepath.EvalSymlinks it does not require the
+// target to exist: a dotfiles setup may create the link before the file, and
+// renaming onto the link would replace it with a regular file.
+func resolveSettingsPath(path string) (string, error) {
+	for hop := 0; hop < 10; hop++ {
+		info, err := os.Lstat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return path, nil // absent (or a link to an absent target): write here
+			}
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return path, nil
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		path = filepath.Clean(target)
+	}
+	return "", fmt.Errorf("too many symlink hops resolving settings path")
+}
+
+// writeFileAtomic stages content in the target's directory and renames it into
+// place, so an interrupted or failing write can never leave a truncated file.
+func writeFileAtomic(path string, content []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+
+	// Close explicitly rather than deferring: filesystems such as NFS and
+	// quota-backed mounts surface write failures only on Close, and renaming a
+	// partially written file would defeat the point of staging it.
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // settingsWriteAttempts bounds the compare-and-swap retry loop in ApplySettings.
@@ -304,20 +396,18 @@ func ApplySettings(srcDir, destDir string, platform config.Platform) (Result, er
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return res, fmt.Errorf("mkdir -p %s: %w", destDir, err)
 	}
-	destPath := filepath.Join(destDir, target)
 
-	// If the settings file is a symlink (a dotfiles-managed setup), write
-	// through to its target. Renaming onto the link path would replace the link
-	// with a regular file and silently detach the user's tracked settings.
-	if resolved, err := filepath.EvalSymlinks(destPath); err == nil {
-		destPath = resolved
-	} else if !os.IsNotExist(err) {
-		return res, fmt.Errorf("resolve %s: %w", destPath, err)
+	// If the settings file is a symlink (a dotfiles-managed setup), write through
+	// to its target — including when that target does not exist yet, since the
+	// link is often created first. Renaming onto the link path would replace the
+	// link with a regular file and silently detach the user's tracked settings.
+	destPath, err := resolveSettingsPath(filepath.Join(destDir, target))
+	if err != nil {
+		return res, fmt.Errorf("resolve %s: %w", filepath.Join(destDir, target), err)
 	}
-	writeDir := filepath.Dir(destPath)
 
 	for attempt := 1; ; attempt++ {
-		live, mode, err := readSettings(destPath)
+		live, mode, _, err := readSettings(destPath)
 		if err != nil {
 			return res, fmt.Errorf("read %s: %w", destPath, err)
 		}
@@ -330,42 +420,14 @@ func ApplySettings(srcDir, destDir string, platform config.Platform) (Result, er
 			return res, nil // already applied: write nothing at all
 		}
 
-		// Stage the new content beside the target so the rename is atomic (and
-		// lands on the same filesystem).
-		tmp, err := os.CreateTemp(writeDir, target+".tmp*")
-		if err != nil {
-			return res, fmt.Errorf("stage %s: %w", destPath, err)
-		}
-		tmpPath := tmp.Name()
-		// Close explicitly rather than deferring: filesystems such as NFS and
-		// quota-backed mounts surface write failures only on Close, and renaming
-		// a partially written file would defeat the point of staging it.
-		writeErr := func() error {
-			if _, err := tmp.Write(merged); err != nil {
-				tmp.Close()
-				return err
-			}
-			if err := tmp.Chmod(mode); err != nil {
-				tmp.Close()
-				return err
-			}
-			return tmp.Close()
-		}()
-		if writeErr != nil {
-			os.Remove(tmpPath)
-			return res, fmt.Errorf("stage %s: %w", destPath, writeErr)
-		}
-
 		// Re-read just before committing: if the agent rewrote the file while we
 		// were merging, redo the merge on top of its version instead of
 		// discarding it.
-		current, _, err := readSettings(destPath)
+		current, _, _, err := readSettings(destPath)
 		if err != nil {
-			os.Remove(tmpPath)
 			return res, fmt.Errorf("re-read %s: %w", destPath, err)
 		}
 		if !bytes.Equal(current, live) {
-			os.Remove(tmpPath)
 			if attempt < settingsWriteAttempts {
 				continue
 			}
@@ -374,23 +436,20 @@ func ApplySettings(srcDir, destDir string, platform config.Platform) (Result, er
 		}
 
 		if len(live) > 0 {
-			// Remove any stale backup first: os.WriteFile does not apply its mode
-			// to an existing file, so a world-readable leftover .bak would keep
-			// its permissions while receiving the settings content.
+			// Replace any stale backup rather than truncating it: os.WriteFile does
+			// not apply its mode to an existing file, so a world-readable leftover
+			// .bak would keep its permissions while receiving the settings content.
 			bakPath := destPath + ".bak"
 			if err := os.Remove(bakPath); err != nil && !os.IsNotExist(err) {
-				os.Remove(tmpPath)
 				return res, fmt.Errorf("replace stale backup %s: %w", bakPath, err)
 			}
-			if err := os.WriteFile(bakPath, live, 0o600); err != nil {
-				os.Remove(tmpPath)
+			if err := writeFileAtomic(bakPath, live, 0o600); err != nil {
 				return res, fmt.Errorf("back up %s: %w", destPath, err)
 			}
 			fmt.Printf("  backed up: %s\n", bakPath)
 		}
 
-		if err := os.Rename(tmpPath, destPath); err != nil {
-			os.Remove(tmpPath)
+		if err := writeFileAtomic(destPath, merged, mode); err != nil {
 			return res, fmt.Errorf("write %s: %w", destPath, err)
 		}
 

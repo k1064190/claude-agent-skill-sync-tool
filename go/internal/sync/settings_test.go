@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -392,6 +393,86 @@ func TestCaptureSettingsContentDroppedKey(t *testing.T) {
 	}
 	if _, exists := got["extraKnownMarketplaces"]; exists {
 		t.Error("extraKnownMarketplaces still in fragment; an owned key absent live must be dropped")
+	}
+}
+
+// TestCaptureSettingsRefusesWhenLiveAbsent is the guard against the worst
+// failure mode: on a machine where the agent has never written its settings
+// file, treating "absent" as an empty object would make every owned key look
+// removed and blank the version-controlled fragment.
+func TestCaptureSettingsRefusesWhenLiveAbsent(t *testing.T) {
+	tempDir := t.TempDir()
+	srcDir := filepath.Join(tempDir, "settings")
+	destDir := filepath.Join(tempDir, ".claude") // exists, but has no settings.json
+	for _, d := range []string{srcDir, destDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fragPath := filepath.Join(srcDir, "claude.json")
+	original := []byte(`{"enabledPlugins": {"a@m": true}}`)
+	if err := os.WriteFile(fragPath, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := CaptureSettings(srcDir, destDir, config.PlatformClaude); err == nil {
+		t.Error("expected an error when the live settings file is absent, got nil")
+	}
+
+	after, err := os.ReadFile(fragPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Errorf("fragment was modified (%s); it must be left untouched", after)
+	}
+}
+
+// TestApplySettingsSymlinkWithMissingTarget covers the dotfiles setup where the
+// symlink is created before its target file exists: the link must be preserved
+// and the target created, not the link replaced by a regular file.
+func TestApplySettingsSymlinkWithMissingTarget(t *testing.T) {
+	tempDir := t.TempDir()
+	srcDir := filepath.Join(tempDir, "settings")
+	destDir := filepath.Join(tempDir, ".claude")
+	store := filepath.Join(tempDir, "dotfiles")
+	for _, d := range []string{srcDir, destDir, store} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "claude.json"),
+		[]byte(`{"enabledPlugins": {"a@m": true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	real := filepath.Join(store, "claude-settings.json") // deliberately not created
+	link := filepath.Join(destDir, "settings.json")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ApplySettings(srcDir, destDir, config.PlatformClaude); err != nil {
+		t.Fatalf("ApplySettings: %v", err)
+	}
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the symlink was replaced by a regular file")
+	}
+	data, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatalf("link target was not created: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("target is not valid JSON: %v", err)
+	}
+	if _, exists := got["enabledPlugins"]; !exists {
+		t.Error("fragment was not written to the link target")
 	}
 }
 

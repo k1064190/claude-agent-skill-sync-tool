@@ -248,32 +248,42 @@ func settingsState(srcDir, destPath string, platform config.Platform) string {
 // runCapture pulls the live value of every fragment-owned settings key back into
 // the fragment, so a change made through the agent's own UI (e.g. installing a
 // plugin with Claude Code's `/plugin`) is not undone by the next --refresh.
-func runCapture(cfg *config.Config, scope config.Scope) {
+// It returns false if any platform failed, so the caller can stop instead of
+// running --refresh on fragments that did not pick up the live changes — which
+// would remove them again.
+func runCapture(cfg *config.Config, scope config.Scope) bool {
 	srcDir := cfg.SourceDir("settings")
 	if _, err := os.Stat(srcDir); err != nil {
 		fmt.Fprintf(os.Stderr, "No settings/ directory in %s — nothing to capture.\n", cfg.SourceRoot)
-		return
+		return false
 	}
 
-	captured := 0
+	captured, failed := 0, 0
 	for _, p := range config.AllPlatforms() {
-		if intsync.SettingsTargetName(p) == "" {
+		if !intsync.SettingsFragmentExists(srcDir, p) {
 			continue
 		}
 		destDir := config.PlatformDestDir(p, scope, "settings")
 		res, err := intsync.CaptureSettings(srcDir, destDir, p)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  capture error [%s]: %v\n", p, err)
+			failed++
 			continue
 		}
 		captured += res.Merged
 	}
 
+	if failed > 0 {
+		fmt.Fprintf(os.Stderr, "\nCapture failed for %d platform(s). Not proceeding — "+
+			"a --refresh now would undo the live changes that were not captured.\n", failed)
+		return false
+	}
 	if captured == 0 {
 		fmt.Println("\nCapture complete. Fragments already match the live settings.")
-		return
+		return true
 	}
 	fmt.Printf("\nCapture complete. Updated %d fragment(s) — commit them to keep the change.\n", captured)
+	return true
 }
 
 // runStatus reports, for every platform and item type, how the destinations
@@ -647,9 +657,12 @@ func main() {
 		}
 	}
 	// Capture runs before refresh so `--capture --refresh` folds live changes
-	// into the fragments first, rather than having refresh undo them.
+	// into the fragments first, rather than having refresh undo them. A failed
+	// capture stops the run for the same reason.
 	if doCapture {
-		runCapture(cfg, scope)
+		if !runCapture(cfg, scope) {
+			os.Exit(1)
+		}
 		if !doStatus && !doRefresh {
 			os.Exit(0)
 		}
@@ -708,6 +721,11 @@ func main() {
 		for _, p := range platforms {
 			if intsync.SettingsTargetName(p) == "" {
 				fmt.Printf("  skipped %s (no managed settings file)\n", p)
+				continue
+			}
+			if !intsync.SettingsFragmentExists(srcDir, p) {
+				fmt.Printf("  skipped %s (no fragment declared: settings/%s)\n",
+					p, intsync.SettingsSourceFile(p))
 				continue
 			}
 			destDir := config.PlatformDestDir(p, scope, itemType)
