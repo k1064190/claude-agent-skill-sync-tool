@@ -62,7 +62,8 @@ The tool asks for a **source root** containing your assets.
 ├── skills/           # Skill directories (shared across platforms via .agents/skills)
 ├── agents/           # Agent .md files (platform-specific routing)
 ├── rules/            # Rule .md files
-└── templates/        # Configuration templates (common.md + platform.md)
+├── templates/        # Configuration templates (common.md + platform.md)
+└── settings/         # Settings fragments merged into each platform's settings file
 ```
 
 Entries under `skills/` (and the other item directories) may be **symlinks into
@@ -125,6 +126,41 @@ To update everything at once:
 ```bash
 claude-sync --update
 ```
+
+## Settings Fragments
+
+Plugins and other settings cannot be symlinked across platforms — each agent
+stores them differently (Claude declares plugins in `settings.json`, Antigravity
+uses `plugins/<name>/plugin.json` bundles, Opencode loads `*.js`, Codex uses
+TOML). What *is* portable is Claude's declaration, so `settings/` holds a
+version-controlled **fragment** that claude-sync injects into the live file:
+
+```
+<source-root>/settings/claude.json   →   ~/.claude/settings.json
+```
+
+```json
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "claude-dashboard@claude-dashboard": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-dashboard": { "source": { "source": "github", "repo": "uppinote20/claude-dashboard" } }
+  }
+}
+```
+
+**Ownership semantics — the fragment owns whole top-level keys:**
+
+- Keys **present** in the fragment replace the live value wholesale. Removing a
+  plugin from the fragment's `enabledPlugins` actually removes it.
+- Keys **absent** from the fragment are preserved untouched — `theme`, `hooks`,
+  `permissions`, and anything else Claude Code writes never churn.
+
+The live file is backed up to `settings.json.bak` before any change, and a
+run that would change nothing writes nothing. Only Claude has a managed settings
+file today; other platforms are skipped.
 
 ## Maintenance Commands
 

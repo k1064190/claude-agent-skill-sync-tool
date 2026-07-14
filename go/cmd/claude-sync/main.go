@@ -220,6 +220,37 @@ func templateState(content, destPath string) string {
 	return "stale"
 }
 
+// settingsState reports whether a platform's live settings file already has the
+// fragment applied: "applied", "pending" (the merge would change it), "missing"
+// (no fragment declared), or "error" (unreadable / malformed JSON).
+func settingsState(srcDir, destPath string, platform config.Platform) string {
+	fragment, err := os.ReadFile(filepath.Join(srcDir, settingsFragmentName(platform)))
+	if err != nil {
+		return "missing"
+	}
+	live, err := os.ReadFile(destPath)
+	if err != nil && !os.IsNotExist(err) {
+		return "error"
+	}
+	_, changed, err := intsync.MergeSettingsContent(live, fragment)
+	if err != nil {
+		return "error"
+	}
+	if changed {
+		return "pending"
+	}
+	return "applied"
+}
+
+// settingsFragmentName mirrors the sync package's fragment naming so status can
+// look up the source file without applying it.
+func settingsFragmentName(platform config.Platform) string {
+	if intsync.SettingsTargetName(platform) == "" {
+		return ""
+	}
+	return strings.ToLower(string(platform)) + ".json"
+}
+
 // runStatus reports, for every platform and item type, how the destinations
 // compare to the source of truth. It never mutates the filesystem.
 func runStatus(cfg *config.Config, scope config.Scope) {
@@ -239,6 +270,18 @@ func runStatus(cfg *config.Config, scope config.Scope) {
 				}
 				destPath := filepath.Join(config.PlatformDestDir(p, scope, itemType), target)
 				fmt.Printf("  %-12s %-8s %s\n", p, templateState(content, destPath), destPath)
+			}
+			continue
+		}
+
+		if itemType == "settings" {
+			for _, p := range platforms {
+				target := intsync.SettingsTargetName(p)
+				if target == "" {
+					continue // platform has no managed settings file
+				}
+				destPath := filepath.Join(config.PlatformDestDir(p, scope, itemType), target)
+				fmt.Printf("  %-12s %-8s %s\n", p, settingsState(srcDir, destPath, p), destPath)
 			}
 			continue
 		}
@@ -456,13 +499,14 @@ func removeDanglingLinks(srcDir, destDir string) int {
 }
 
 // runRefresh re-applies the current sync state without prompting: it re-links
-// items that are already linked (repairing dangling links) and rebuilds
-// instruction files that already exist (repairing template drift). It never
-// adds new items or creates instruction files that were not present before, so
-// it preserves the user's earlier selections.
+// items that are already linked (repairing dangling links), rebuilds
+// instruction files that already exist (repairing template drift), and injects
+// declared settings fragments. It never adds new items or creates instruction
+// files that were not present before, so it preserves the user's earlier
+// selections.
 func runRefresh(cfg *config.Config, scope config.Scope) {
 	platforms := config.AllPlatforms()
-	totalLinked, totalRemoved, totalRebuilt := 0, 0, 0
+	totalLinked, totalRemoved, totalRebuilt, totalMerged := 0, 0, 0, 0
 
 	for _, itemType := range config.ItemTypes {
 		srcDir := cfg.SourceDir(itemType)
@@ -472,6 +516,19 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 
 		if itemType == "templates" {
 			totalRebuilt += refreshTemplates(srcDir, scope, platforms)
+			continue
+		}
+
+		if itemType == "settings" {
+			for _, p := range platforms {
+				destDir := config.PlatformDestDir(p, scope, itemType)
+				res, err := intsync.ApplySettings(srcDir, destDir, p)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  settings error [%s]: %v\n", p, err)
+					continue
+				}
+				totalMerged += res.Merged
+			}
 			continue
 		}
 
@@ -502,8 +559,8 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 		}
 	}
 
-	fmt.Printf("\nRefresh complete. Re-linked %d item(s), removed %d broken link(s), rebuilt %d template(s).\n",
-		totalLinked, totalRemoved, totalRebuilt)
+	fmt.Printf("\nRefresh complete. Re-linked %d item(s), removed %d broken link(s), rebuilt %d template(s), merged %d settings file(s).\n",
+		totalLinked, totalRemoved, totalRebuilt, totalMerged)
 }
 
 // --- Main ---
@@ -605,6 +662,33 @@ func main() {
 		fmt.Printf("    - [%s] %s\n", p, displayPath)
 	}
 	fmt.Println()
+
+	// --- Settings Merge Bypass ---
+	// Settings are injected, not symlinked, so there is no tree to pick from.
+	if itemType == "settings" {
+		fmt.Printf("\nMerging settings fragments into selected platforms...\n")
+
+		totalMerged := 0
+		for _, p := range platforms {
+			if intsync.SettingsTargetName(p) == "" {
+				fmt.Printf("  skipped %s (no managed settings file)\n", p)
+				continue
+			}
+			destDir := config.PlatformDestDir(p, scope, itemType)
+			res, err := intsync.ApplySettings(srcDir, destDir, p)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  settings error [%s]: %v\n", p, err)
+				continue
+			}
+			if res.Merged == 0 {
+				fmt.Printf("  %s: already in sync\n", p)
+			}
+			totalMerged += res.Merged
+		}
+
+		fmt.Printf("\nDone. Merged %d settings file(s) across %d platform(s)\n", totalMerged, len(platforms))
+		os.Exit(0)
+	}
 
 	// --- Templates Builder Bypass ---
 	if itemType == "templates" {

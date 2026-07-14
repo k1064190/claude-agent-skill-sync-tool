@@ -17,6 +17,8 @@ type Result struct {
 	Removed int
 	// Built is the number of template files successfully built.
 	Built int
+	// Merged is the number of settings files updated from a fragment.
+	Merged int
 }
 
 // SyncItems applies the symlink algorithm for all items in allItems.
