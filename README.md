@@ -1,6 +1,6 @@
 # claude-sync
 
-Interactive CLI for selectively syncing AI agent skills, agents, and rules across multiple platforms (Claude Code, Gemini CLI, Codex, Opencode) via symlinks.
+Interactive CLI for selectively syncing AI agent skills, agents, rules, instruction templates, and settings across multiple platforms (Claude Code, Antigravity, Codex, Opencode).
 
 ## Why?
 
@@ -88,7 +88,7 @@ Choose one or more platforms to sync to:
 ### 3. Scope & Item Selection
 
 1.  **Scope**: Choose **User scope** (global) or **Project scope** (current directory).
-2.  **Item Type**: Choose what to sync (`skills`, `agents`, `rules`, or `templates`).
+2.  **Item Type**: Choose what to sync (`skills`, `agents`, `rules`, `templates`, or `settings`).
 
 ### 4. Template Builder (Special Case)
 
