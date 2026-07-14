@@ -220,6 +220,72 @@ func templateState(content, destPath string) string {
 	return "stale"
 }
 
+// settingsState reports whether a platform's live settings file already has the
+// fragment applied: "applied", "pending" (the merge would change it), "missing"
+// (no fragment declared), or "error" (unreadable / malformed JSON).
+func settingsState(srcDir, destPath string, platform config.Platform) string {
+	fragment, err := os.ReadFile(filepath.Join(srcDir, intsync.SettingsSourceFile(platform)))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "missing" // no fragment declared for this platform
+		}
+		return "error" // declared but unreadable — --refresh would fail
+	}
+	live, err := os.ReadFile(destPath)
+	if err != nil && !os.IsNotExist(err) {
+		return "error"
+	}
+	_, changed, err := intsync.MergeSettingsContent(live, fragment)
+	if err != nil {
+		return "error"
+	}
+	if changed {
+		return "pending"
+	}
+	return "applied"
+}
+
+// runCapture pulls the live value of every fragment-owned settings key back into
+// the fragment, so a change made through the agent's own UI (e.g. installing a
+// plugin with Claude Code's `/plugin`) is not undone by the next --refresh.
+// It returns false if any platform failed, so the caller can stop instead of
+// running --refresh on fragments that did not pick up the live changes — which
+// would remove them again.
+func runCapture(cfg *config.Config, scope config.Scope) bool {
+	srcDir := cfg.SourceDir("settings")
+	if _, err := os.Stat(srcDir); err != nil {
+		fmt.Fprintf(os.Stderr, "No settings/ directory in %s — nothing to capture.\n", cfg.SourceRoot)
+		return false
+	}
+
+	captured, failed := 0, 0
+	for _, p := range config.AllPlatforms() {
+		if !intsync.SettingsFragmentExists(srcDir, p) {
+			continue
+		}
+		destDir := config.PlatformDestDir(p, scope, "settings")
+		res, err := intsync.CaptureSettings(srcDir, destDir, p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  capture error [%s]: %v\n", p, err)
+			failed++
+			continue
+		}
+		captured += res.Merged
+	}
+
+	if failed > 0 {
+		fmt.Fprintf(os.Stderr, "\nCapture failed for %d platform(s). Not proceeding — "+
+			"a --refresh now would undo the live changes that were not captured.\n", failed)
+		return false
+	}
+	if captured == 0 {
+		fmt.Println("\nCapture complete. Fragments already match the live settings.")
+		return true
+	}
+	fmt.Printf("\nCapture complete. Updated %d fragment(s) — commit them to keep the change.\n", captured)
+	return true
+}
+
 // runStatus reports, for every platform and item type, how the destinations
 // compare to the source of truth. It never mutates the filesystem.
 func runStatus(cfg *config.Config, scope config.Scope) {
@@ -239,6 +305,18 @@ func runStatus(cfg *config.Config, scope config.Scope) {
 				}
 				destPath := filepath.Join(config.PlatformDestDir(p, scope, itemType), target)
 				fmt.Printf("  %-12s %-8s %s\n", p, templateState(content, destPath), destPath)
+			}
+			continue
+		}
+
+		if itemType == "settings" {
+			for _, p := range platforms {
+				target := intsync.SettingsTargetName(p)
+				if target == "" {
+					continue // platform has no managed settings file
+				}
+				destPath := filepath.Join(config.PlatformDestDir(p, scope, itemType), target)
+				fmt.Printf("  %-12s %-8s %s\n", p, settingsState(srcDir, destPath, p), destPath)
 			}
 			continue
 		}
@@ -456,13 +534,17 @@ func removeDanglingLinks(srcDir, destDir string) int {
 }
 
 // runRefresh re-applies the current sync state without prompting: it re-links
-// items that are already linked (repairing dangling links) and rebuilds
-// instruction files that already exist (repairing template drift). It never
-// adds new items or creates instruction files that were not present before, so
-// it preserves the user's earlier selections.
-func runRefresh(cfg *config.Config, scope config.Scope) {
+// items that are already linked (repairing dangling links), rebuilds
+// instruction files that already exist (repairing template drift), and injects
+// declared settings fragments. It never adds new items or creates instruction
+// files that were not present before, so it preserves the user's earlier
+// selections.
+// It returns false if any step failed, so the caller can exit non-zero rather
+// than letting a script believe the refresh applied everything it declares.
+func runRefresh(cfg *config.Config, scope config.Scope) bool {
 	platforms := config.AllPlatforms()
-	totalLinked, totalRemoved, totalRebuilt := 0, 0, 0
+	totalLinked, totalRemoved, totalRebuilt, totalMerged := 0, 0, 0, 0
+	failed := 0
 
 	for _, itemType := range config.ItemTypes {
 		srcDir := cfg.SourceDir(itemType)
@@ -472,6 +554,20 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 
 		if itemType == "templates" {
 			totalRebuilt += refreshTemplates(srcDir, scope, platforms)
+			continue
+		}
+
+		if itemType == "settings" {
+			for _, p := range platforms {
+				destDir := config.PlatformDestDir(p, scope, itemType)
+				res, err := intsync.ApplySettings(srcDir, destDir, p)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  settings error [%s]: %v\n", p, err)
+					failed++
+					continue
+				}
+				totalMerged += res.Merged
+			}
 			continue
 		}
 
@@ -496,21 +592,27 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 			res, err := intsync.SyncItems(allItems, existing, srcDir, destDir)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  relink error [%s/%s]: %v\n", p, itemType, err)
+				failed++
 				continue
 			}
 			totalLinked += res.Linked
 		}
 	}
 
-	fmt.Printf("\nRefresh complete. Re-linked %d item(s), removed %d broken link(s), rebuilt %d template(s).\n",
-		totalLinked, totalRemoved, totalRebuilt)
+	fmt.Printf("\nRefresh complete. Re-linked %d item(s), removed %d broken link(s), rebuilt %d template(s), merged %d settings file(s).\n",
+		totalLinked, totalRemoved, totalRebuilt, totalMerged)
+	if failed > 0 {
+		fmt.Fprintf(os.Stderr, "%d step(s) failed; the declared state was not fully applied.\n", failed)
+		return false
+	}
+	return true
 }
 
 // --- Main ---
 
 func main() {
 	// --- Flag parsing (non-interactive maintenance modes) ---
-	var doStatus, doRefresh, doUpdate bool
+	var doStatus, doRefresh, doUpdate, doCapture bool
 	scope := config.ScopeUser
 	for _, arg := range os.Args[1:] {
 		switch arg {
@@ -520,14 +622,17 @@ func main() {
 			doRefresh = true
 		case "--update", "-u":
 			doUpdate = true
+		case "--capture", "-c":
+			doCapture = true
 		case "--project", "-p":
 			scope = config.ScopeProject
 		case "--help", "-h":
-			fmt.Println("Usage: claude-sync [--status|-s] [--refresh|-r] [--update|-u] [--project|-p]")
+			fmt.Println("Usage: claude-sync [--status|-s] [--refresh|-r] [--update|-u] [--capture|-c] [--project|-p]")
 			fmt.Println("  (no flags)   interactive sync")
 			fmt.Println("  --status     report drift across platforms without changing anything")
-			fmt.Println("  --refresh    re-link existing items and rebuild existing templates")
+			fmt.Println("  --refresh    re-link existing items, rebuild templates, inject settings fragments")
 			fmt.Println("  --update     git-pull every repo referenced by symlinks in the source root")
+			fmt.Println("  --capture    pull live settings back into the fragments (run after /plugin)")
 			fmt.Println("  --project    operate on project scope (./) instead of user scope (~/)")
 			os.Exit(0)
 		}
@@ -543,7 +648,7 @@ func main() {
 	}
 
 	if cfg == nil {
-		if doStatus || doRefresh || doUpdate {
+		if doStatus || doRefresh || doUpdate || doCapture {
 			fmt.Fprintln(os.Stderr, "No config found. Run claude-sync once interactively first.")
 			os.Exit(1)
 		}
@@ -556,7 +661,18 @@ func main() {
 
 	if doUpdate {
 		runUpdate(cfg)
-		// --update composes with --status/--refresh in one invocation.
+		// --update composes with --capture/--status/--refresh in one invocation.
+		if !doStatus && !doRefresh && !doCapture {
+			os.Exit(0)
+		}
+	}
+	// Capture runs before refresh so `--capture --refresh` folds live changes
+	// into the fragments first, rather than having refresh undo them. A failed
+	// capture stops the run for the same reason.
+	if doCapture {
+		if !runCapture(cfg, scope) {
+			os.Exit(1)
+		}
 		if !doStatus && !doRefresh {
 			os.Exit(0)
 		}
@@ -566,7 +682,9 @@ func main() {
 		os.Exit(0)
 	}
 	if doRefresh {
-		runRefresh(cfg, scope)
+		if !runRefresh(cfg, scope) {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
@@ -605,6 +723,38 @@ func main() {
 		fmt.Printf("    - [%s] %s\n", p, displayPath)
 	}
 	fmt.Println()
+
+	// --- Settings Merge Bypass ---
+	// Settings are injected, not symlinked, so there is no tree to pick from.
+	if itemType == "settings" {
+		fmt.Printf("\nMerging settings fragments into selected platforms...\n")
+
+		totalMerged := 0
+		for _, p := range platforms {
+			if intsync.SettingsTargetName(p) == "" {
+				fmt.Printf("  skipped %s (no managed settings file)\n", p)
+				continue
+			}
+			if !intsync.SettingsFragmentExists(srcDir, p) {
+				fmt.Printf("  skipped %s (no fragment declared: settings/%s)\n",
+					p, intsync.SettingsSourceFile(p))
+				continue
+			}
+			destDir := config.PlatformDestDir(p, scope, itemType)
+			res, err := intsync.ApplySettings(srcDir, destDir, p)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  settings error [%s]: %v\n", p, err)
+				continue
+			}
+			if res.Merged == 0 {
+				fmt.Printf("  %s: already in sync\n", p)
+			}
+			totalMerged += res.Merged
+		}
+
+		fmt.Printf("\nDone. Merged %d settings file(s) across %d platform(s)\n", totalMerged, len(platforms))
+		os.Exit(0)
+	}
 
 	// --- Templates Builder Bypass ---
 	if itemType == "templates" {

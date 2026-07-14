@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-07-14
+
+### Added
+
+- `settings/` item type — version-controlled JSON fragments injected into a
+  platform's live settings file. Motivated by Claude plugins, whose only
+  portable form is the `enabledPlugins` / `extraKnownMarketplaces` declaration
+  in `settings.json` (plugin *artifacts* are not shareable: Antigravity uses
+  directory bundles, Opencode `.js` files, Codex TOML).
+- Ownership semantics: a fragment owns whole top-level keys — present keys
+  replace the live value wholesale (so removals propagate), absent keys are
+  preserved untouched (so machine-local settings never churn).
+- `--status` reports `applied` / `pending` / `missing`; `--refresh` injects,
+  backing the live file up to `<file>.bak` first and writing nothing when
+  already in sync. Only Claude has a managed settings file today.
+- `--capture` / `-c` — the reverse direction: pull the live value of every
+  fragment-owned key back into the fragment. Needed because the fragment owns
+  `enabledPlugins` wholesale, so a plugin added through Claude Code's `/plugin`
+  would otherwise be removed again by the next `--refresh`. Capture only touches
+  keys the fragment already declares, so machine-local settings never leak into
+  version control.
+
+### Security
+
+- Settings writes are atomic (temp file + rename) with a compare-and-swap
+  re-read, so a concurrent write by the agent is folded in rather than clobbered
+  and a crash cannot leave a truncated settings file. Symlinked settings files
+  are written through to their target, the live file's permission bits are
+  preserved, and stale permissive `.bak` files are replaced rather than
+  truncated.
+
 ## [0.7.0] - 2026-07-11
 
 ### Fixed

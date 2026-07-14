@@ -45,6 +45,13 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 		isTemplate = true
 	}
 
+	// Settings live directly in the platform's config directory (e.g.
+	// ~/.claude/settings.json, ./.claude/settings.json), so the destination is
+	// that directory itself — not a per-item-type subdirectory.
+	if itemType == "settings" {
+		itemType = ""
+	}
+
 	// For Project Scope templates, the destination is the project root itself
 	// (e.g. ./CLAUDE.md, ./GEMINI.md, ./AGENTS.md)
 	if scope == ScopeProject && isTemplate {

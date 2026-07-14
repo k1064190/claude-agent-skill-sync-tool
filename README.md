@@ -1,6 +1,6 @@
 # claude-sync
 
-Interactive CLI for selectively syncing AI agent skills, agents, and rules across multiple platforms (Claude Code, Gemini CLI, Codex, Opencode) via symlinks.
+Interactive CLI for selectively syncing AI agent skills, agents, rules, instruction templates, and settings across multiple platforms (Claude Code, Antigravity, Codex, Opencode).
 
 ## Why?
 
@@ -62,7 +62,8 @@ The tool asks for a **source root** containing your assets.
 ├── skills/           # Skill directories (shared across platforms via .agents/skills)
 ├── agents/           # Agent .md files (platform-specific routing)
 ├── rules/            # Rule .md files
-└── templates/        # Configuration templates (common.md + platform.md)
+├── templates/        # Configuration templates (common.md + platform.md)
+└── settings/         # Settings fragments merged into each platform's settings file
 ```
 
 Entries under `skills/` (and the other item directories) may be **symlinks into
@@ -87,7 +88,7 @@ Choose one or more platforms to sync to:
 ### 3. Scope & Item Selection
 
 1.  **Scope**: Choose **User scope** (global) or **Project scope** (current directory).
-2.  **Item Type**: Choose what to sync (`skills`, `agents`, `rules`, or `templates`).
+2.  **Item Type**: Choose what to sync (`skills`, `agents`, `rules`, `templates`, or `settings`).
 
 ### 4. Template Builder (Special Case)
 
@@ -126,6 +127,54 @@ To update everything at once:
 claude-sync --update
 ```
 
+## Settings Fragments
+
+Plugins and other settings cannot be symlinked across platforms — each agent
+stores them differently (Claude declares plugins in `settings.json`, Antigravity
+uses `plugins/<name>/plugin.json` bundles, Opencode loads `*.js`, Codex uses
+TOML). What *is* portable is Claude's declaration, so `settings/` holds a
+version-controlled **fragment** that claude-sync injects into the live file:
+
+```
+<source-root>/settings/claude.json   →   ~/.claude/settings.json
+```
+
+```json
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "claude-dashboard@claude-dashboard": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-dashboard": { "source": { "source": "github", "repo": "uppinote20/claude-dashboard" } }
+  }
+}
+```
+
+**Ownership semantics — the fragment owns whole top-level keys:**
+
+- Keys **present** in the fragment replace the live value wholesale. Removing a
+  plugin from the fragment's `enabledPlugins` actually removes it.
+- Keys **absent** from the fragment are preserved untouched — `theme`, `hooks`,
+  `permissions`, and anything else Claude Code writes never churn.
+
+The live file is backed up to `settings.json.bak` before any change, and a
+run that would change nothing writes nothing. Only Claude has a managed settings
+file today; other platforms are skipped.
+
+**Adding a plugin.** Install it the native way (Claude Code's `/plugin`), which
+writes `enabledPlugins` in the live file. Because the fragment *owns* that key,
+the next `--refresh` would otherwise remove your new plugin again — so capture it
+back into the fragment first:
+
+```bash
+claude-sync --capture   # pull the live values of owned keys into the fragment
+git -C <repo> commit -am "add <plugin>"
+```
+
+`--capture` only touches keys the fragment already declares, so machine-local
+settings never leak into version control.
+
 ## Maintenance Commands
 
 | Flag | Effect |
@@ -133,6 +182,7 @@ claude-sync --update
 | `--status` / `-s` | Read-only drift report: linked/broken link counts per platform, `in-sync`/`stale`/`missing` per instruction file. |
 | `--refresh` / `-r` | Idempotent repair: re-link existing items, remove dangling tool-owned links, rebuild existing instruction files (backing up to `<file>.bak` first). Never adds new items. |
 | `--update` / `-u` | `git pull --ff-only` every repository referenced by symlinks under the source root. Combine with `--status`/`--refresh` in one invocation. |
+| `--capture` / `-c` | Reverse of the settings injection: pull the live value of every fragment-owned key back into the fragment. Run after changing settings through the agent's own UI (e.g. `/plugin`). |
 | `--project` / `-p` | Operate on project scope (`./`) instead of user scope (`~/`). |
 
 ## TUI Controls
