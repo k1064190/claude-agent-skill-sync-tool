@@ -245,6 +245,37 @@ func settingsState(srcDir, destPath string, platform config.Platform) string {
 	return "applied"
 }
 
+// runCapture pulls the live value of every fragment-owned settings key back into
+// the fragment, so a change made through the agent's own UI (e.g. installing a
+// plugin with Claude Code's `/plugin`) is not undone by the next --refresh.
+func runCapture(cfg *config.Config, scope config.Scope) {
+	srcDir := cfg.SourceDir("settings")
+	if _, err := os.Stat(srcDir); err != nil {
+		fmt.Fprintf(os.Stderr, "No settings/ directory in %s — nothing to capture.\n", cfg.SourceRoot)
+		return
+	}
+
+	captured := 0
+	for _, p := range config.AllPlatforms() {
+		if intsync.SettingsTargetName(p) == "" {
+			continue
+		}
+		destDir := config.PlatformDestDir(p, scope, "settings")
+		res, err := intsync.CaptureSettings(srcDir, destDir, p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  capture error [%s]: %v\n", p, err)
+			continue
+		}
+		captured += res.Merged
+	}
+
+	if captured == 0 {
+		fmt.Println("\nCapture complete. Fragments already match the live settings.")
+		return
+	}
+	fmt.Printf("\nCapture complete. Updated %d fragment(s) — commit them to keep the change.\n", captured)
+}
+
 // runStatus reports, for every platform and item type, how the destinations
 // compare to the source of truth. It never mutates the filesystem.
 func runStatus(cfg *config.Config, scope config.Scope) {
@@ -561,7 +592,7 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 
 func main() {
 	// --- Flag parsing (non-interactive maintenance modes) ---
-	var doStatus, doRefresh, doUpdate bool
+	var doStatus, doRefresh, doUpdate, doCapture bool
 	scope := config.ScopeUser
 	for _, arg := range os.Args[1:] {
 		switch arg {
@@ -571,14 +602,17 @@ func main() {
 			doRefresh = true
 		case "--update", "-u":
 			doUpdate = true
+		case "--capture", "-c":
+			doCapture = true
 		case "--project", "-p":
 			scope = config.ScopeProject
 		case "--help", "-h":
-			fmt.Println("Usage: claude-sync [--status|-s] [--refresh|-r] [--update|-u] [--project|-p]")
+			fmt.Println("Usage: claude-sync [--status|-s] [--refresh|-r] [--update|-u] [--capture|-c] [--project|-p]")
 			fmt.Println("  (no flags)   interactive sync")
 			fmt.Println("  --status     report drift across platforms without changing anything")
-			fmt.Println("  --refresh    re-link existing items and rebuild existing templates")
+			fmt.Println("  --refresh    re-link existing items, rebuild templates, inject settings fragments")
 			fmt.Println("  --update     git-pull every repo referenced by symlinks in the source root")
+			fmt.Println("  --capture    pull live settings back into the fragments (run after /plugin)")
 			fmt.Println("  --project    operate on project scope (./) instead of user scope (~/)")
 			os.Exit(0)
 		}
@@ -594,7 +628,7 @@ func main() {
 	}
 
 	if cfg == nil {
-		if doStatus || doRefresh || doUpdate {
+		if doStatus || doRefresh || doUpdate || doCapture {
 			fmt.Fprintln(os.Stderr, "No config found. Run claude-sync once interactively first.")
 			os.Exit(1)
 		}
@@ -608,6 +642,14 @@ func main() {
 	if doUpdate {
 		runUpdate(cfg)
 		// --update composes with --status/--refresh in one invocation.
+		if !doStatus && !doRefresh {
+			os.Exit(0)
+		}
+	}
+	// Capture runs before refresh so `--capture --refresh` folds live changes
+	// into the fragments first, rather than having refresh undo them.
+	if doCapture {
+		runCapture(cfg, scope)
 		if !doStatus && !doRefresh {
 			os.Exit(0)
 		}

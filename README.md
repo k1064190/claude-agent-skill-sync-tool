@@ -162,6 +162,19 @@ The live file is backed up to `settings.json.bak` before any change, and a
 run that would change nothing writes nothing. Only Claude has a managed settings
 file today; other platforms are skipped.
 
+**Adding a plugin.** Install it the native way (Claude Code's `/plugin`), which
+writes `enabledPlugins` in the live file. Because the fragment *owns* that key,
+the next `--refresh` would otherwise remove your new plugin again — so capture it
+back into the fragment first:
+
+```bash
+claude-sync --capture   # pull the live values of owned keys into the fragment
+git -C <repo> commit -am "add <plugin>"
+```
+
+`--capture` only touches keys the fragment already declares, so machine-local
+settings never leak into version control.
+
 ## Maintenance Commands
 
 | Flag | Effect |
@@ -169,6 +182,7 @@ file today; other platforms are skipped.
 | `--status` / `-s` | Read-only drift report: linked/broken link counts per platform, `in-sync`/`stale`/`missing` per instruction file. |
 | `--refresh` / `-r` | Idempotent repair: re-link existing items, remove dangling tool-owned links, rebuild existing instruction files (backing up to `<file>.bak` first). Never adds new items. |
 | `--update` / `-u` | `git pull --ff-only` every repository referenced by symlinks under the source root. Combine with `--status`/`--refresh` in one invocation. |
+| `--capture` / `-c` | Reverse of the settings injection: pull the live value of every fragment-owned key back into the fragment. Run after changing settings through the agent's own UI (e.g. `/plugin`). |
 | `--project` / `-p` | Operate on project scope (`./`) instead of user scope (`~/`). |
 
 ## TUI Controls

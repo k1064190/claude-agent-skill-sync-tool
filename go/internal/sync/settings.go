@@ -97,6 +97,65 @@ func MergeSettingsContent(live, fragment []byte) ([]byte, bool, error) {
 	return merged, !equalJSON(live, merged), nil
 }
 
+// CaptureSettingsContent is the reverse of MergeSettingsContent: it rewrites the
+// fragment so each key it already owns takes the live file's current value.
+//
+// This closes the loop for changes made through the agent's own UI — installing
+// a plugin with Claude Code's `/plugin` command writes `enabledPlugins` in the
+// live file, and without capturing it back the next `--refresh` would remove the
+// new plugin again, since the fragment owns that key wholesale.
+//
+// Only keys already present in the fragment are touched: the fragment declares
+// what it owns, and capture never widens that set, so machine-local settings
+// (theme, hooks, permissions, …) can never leak into version control. An owned
+// key that no longer exists in the live file is dropped from the fragment.
+//
+// Args:
+//
+//	live     ([]byte): Current settings file content.
+//	fragment ([]byte): The version-controlled fragment, defining the owned keys.
+//
+// Returns:
+//
+//	captured ([]byte): The fragment content to write.
+//	changed  (bool):   False if the fragment already matches the live values.
+//	err      (error):  Malformed JSON in either input, or nil.
+func CaptureSettingsContent(live, fragment []byte) ([]byte, bool, error) {
+	liveMap := map[string]json.RawMessage{}
+	if len(bytes.TrimSpace(live)) > 0 {
+		if err := json.Unmarshal(live, &liveMap); err != nil {
+			return nil, false, fmt.Errorf("parse live settings: %w", err)
+		}
+		if liveMap == nil {
+			return nil, false, fmt.Errorf("parse live settings: expected a JSON object, got null")
+		}
+	}
+
+	fragMap := map[string]json.RawMessage{}
+	if err := json.Unmarshal(fragment, &fragMap); err != nil {
+		return nil, false, fmt.Errorf("parse settings fragment: %w", err)
+	}
+	if fragMap == nil {
+		return nil, false, fmt.Errorf("parse settings fragment: expected a JSON object, got null")
+	}
+
+	captured := map[string]json.RawMessage{}
+	for k := range fragMap {
+		if v, exists := liveMap[k]; exists {
+			captured[k] = v
+		}
+		// An owned key missing from the live file is dropped.
+	}
+
+	out, err := json.MarshalIndent(captured, "", "  ")
+	if err != nil {
+		return nil, false, fmt.Errorf("encode captured fragment: %w", err)
+	}
+	out = append(out, '\n')
+
+	return out, !equalJSON(fragment, out), nil
+}
+
 // equalJSON reports whether two JSON documents are semantically identical,
 // ignoring key order and formatting. Used so an already-applied fragment
 // reports no change even when the live file's formatting differs.
@@ -117,6 +176,58 @@ func equalJSON(a, b []byte) bool {
 		return false
 	}
 	return bytes.Equal(ab, bb)
+}
+
+// CaptureSettings rewrites the platform's fragment in srcDir so its owned keys
+// take the values from the live settings file under destDir. Use it after
+// changing settings through the agent's own UI (e.g. Claude Code's `/plugin`),
+// so the version-controlled fragment — which `--refresh` treats as the source of
+// truth — does not undo the change on its next run.
+//
+// Returns:
+//
+//	result (Result): Merged is 1 when the fragment was updated, 0 when already current.
+//	err    (error):  Read/parse/write error, or nil.
+func CaptureSettings(srcDir, destDir string, platform config.Platform) (Result, error) {
+	var res Result
+
+	target := SettingsTargetName(platform)
+	srcName := SettingsSourceFile(platform)
+	if target == "" || srcName == "" {
+		return res, nil
+	}
+
+	fragPath := filepath.Join(srcDir, srcName)
+	fragment, err := os.ReadFile(fragPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Nothing declared: capture has no key set to work from, and widening
+			// it would dump the whole settings file into version control.
+			return res, nil
+		}
+		return res, fmt.Errorf("read settings fragment: %w", err)
+	}
+
+	live, _, err := readSettings(filepath.Join(destDir, target))
+	if err != nil {
+		return res, fmt.Errorf("read live settings: %w", err)
+	}
+
+	captured, changed, err := CaptureSettingsContent(live, fragment)
+	if err != nil {
+		return res, fmt.Errorf("%s: %w", fragPath, err)
+	}
+	if !changed {
+		return res, nil
+	}
+
+	if err := os.WriteFile(fragPath, captured, 0o644); err != nil {
+		return res, fmt.Errorf("write %s: %w", fragPath, err)
+	}
+
+	fmt.Printf("  captured: %s\n", fragPath)
+	res.Merged++
+	return res, nil
 }
 
 // readSettings reads the live settings file, treating "not found" as empty.

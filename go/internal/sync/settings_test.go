@@ -311,6 +311,90 @@ func TestSettingsSourceFile(t *testing.T) {
 	}
 }
 
+// TestCaptureSettingsContent verifies the reverse direction: the fragment picks
+// up the live value of every key it already owns, and nothing else. Machine-local
+// keys must never leak into the version-controlled fragment.
+func TestCaptureSettingsContent(t *testing.T) {
+	fragment := []byte(`{"enabledPlugins": {"a@m": true}, "extraKnownMarketplaces": {"m": {"repo": "x/y"}}}`)
+	live := []byte(`{
+  "theme": "light",
+  "hooks": {"PostToolUse": []},
+  "enabledPlugins": {"a@m": true, "new@m": true},
+  "extraKnownMarketplaces": {"m": {"repo": "x/y"}}
+}`)
+
+	captured, changed, err := CaptureSettingsContent(live, fragment)
+	if err != nil {
+		t.Fatalf("CaptureSettingsContent: %v", err)
+	}
+	if !changed {
+		t.Error("changed = false; want true (a new plugin appeared live)")
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(captured, &got); err != nil {
+		t.Fatalf("captured fragment is not valid JSON: %v", err)
+	}
+
+	// Only the owned keys are present — no machine-local leakage.
+	if _, leaked := got["theme"]; leaked {
+		t.Error("theme leaked into the fragment; capture must only touch owned keys")
+	}
+	if _, leaked := got["hooks"]; leaked {
+		t.Error("hooks leaked into the fragment")
+	}
+	if len(got) != 2 {
+		t.Errorf("fragment has %d keys (%v); want exactly the 2 owned keys", len(got), got)
+	}
+
+	// The owned key picked up the live addition.
+	plugins, ok := got["enabledPlugins"].(map[string]any)
+	if !ok {
+		t.Fatalf("enabledPlugins = %v; want object", got["enabledPlugins"])
+	}
+	if plugins["new@m"] != true {
+		t.Errorf("enabledPlugins = %v; want the live-added new@m captured", plugins)
+	}
+}
+
+// TestCaptureSettingsContentNoChange verifies capture is a no-op when the live
+// file already agrees with the fragment.
+func TestCaptureSettingsContentNoChange(t *testing.T) {
+	fragment := []byte(`{"enabledPlugins": {"a@m": true}}`)
+	live := []byte(`{"theme": "light", "enabledPlugins": {"a@m": true}}`)
+
+	_, changed, err := CaptureSettingsContent(live, fragment)
+	if err != nil {
+		t.Fatalf("CaptureSettingsContent: %v", err)
+	}
+	if changed {
+		t.Error("changed = true; want false when live already matches the fragment")
+	}
+}
+
+// TestCaptureSettingsContentDroppedKey verifies that an owned key which no
+// longer exists live is dropped from the fragment, so disabling a plugin
+// through the agent's own UI is captured too.
+func TestCaptureSettingsContentDroppedKey(t *testing.T) {
+	fragment := []byte(`{"enabledPlugins": {"a@m": true}, "extraKnownMarketplaces": {"m": {}}}`)
+	live := []byte(`{"enabledPlugins": {"a@m": true}}`)
+
+	captured, changed, err := CaptureSettingsContent(live, fragment)
+	if err != nil {
+		t.Fatalf("CaptureSettingsContent: %v", err)
+	}
+	if !changed {
+		t.Error("changed = false; want true (an owned key vanished live)")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(captured, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := got["extraKnownMarketplaces"]; exists {
+		t.Error("extraKnownMarketplaces still in fragment; an owned key absent live must be dropped")
+	}
+}
+
 // TestApplySettings exercises the on-disk path: merge the fragment into the
 // live file and report the outcome.
 func TestApplySettings(t *testing.T) {
