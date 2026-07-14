@@ -300,16 +300,22 @@ func CaptureSettings(srcDir, destDir string, platform config.Platform) (Result, 
 		return res, fmt.Errorf("read settings fragment: %w", err)
 	}
 
-	livePath := filepath.Join(destDir, target)
+	livePath, err := resolveSettingsPath(filepath.Join(destDir, target))
+	if err != nil {
+		return res, fmt.Errorf("resolve live settings: %w", err)
+	}
 	live, _, exists, err := readSettings(livePath)
 	if err != nil {
 		return res, fmt.Errorf("read live settings: %w", err)
 	}
+	// Refuse on an absent or empty live file rather than treating it as an empty
+	// settings object: every owned key would look removed and the fragment would
+	// be blanked, destroying the version-controlled plugin declarations.
 	if !exists {
-		// Refuse rather than treating an absent file as an empty settings object:
-		// every owned key would look removed and the fragment would be blanked,
-		// destroying the version-controlled plugin declarations.
 		return res, fmt.Errorf("live settings %s does not exist; nothing to capture", livePath)
+	}
+	if len(bytes.TrimSpace(live)) == 0 {
+		return res, fmt.Errorf("live settings %s is empty; refusing to blank the fragment", livePath)
 	}
 
 	captured, changed, err := CaptureSettingsContent(live, fragment)
@@ -320,11 +326,19 @@ func CaptureSettings(srcDir, destDir string, platform config.Platform) (Result, 
 		return res, nil
 	}
 
+	// Write through a symlinked fragment to its target: the source root is a
+	// curation layer, so settings/claude.json is typically a link into the repo
+	// that must actually receive the captured content and be committed.
+	writePath, err := resolveSettingsPath(fragPath)
+	if err != nil {
+		return res, fmt.Errorf("resolve %s: %w", fragPath, err)
+	}
 	// Atomic: a truncated fragment would lose the very key set that tells a
 	// later capture what it owns, and could not be reconstructed from the live file.
-	if err := writeFileAtomic(fragPath, captured, 0o644); err != nil {
-		return res, fmt.Errorf("write %s: %w", fragPath, err)
+	if err := writeFileAtomic(writePath, captured, 0o644); err != nil {
+		return res, fmt.Errorf("write %s: %w", writePath, err)
 	}
+	fragPath = writePath
 
 	fmt.Printf("  captured: %s\n", fragPath)
 	res.Merged++

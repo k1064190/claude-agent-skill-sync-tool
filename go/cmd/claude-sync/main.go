@@ -539,9 +539,12 @@ func removeDanglingLinks(srcDir, destDir string) int {
 // declared settings fragments. It never adds new items or creates instruction
 // files that were not present before, so it preserves the user's earlier
 // selections.
-func runRefresh(cfg *config.Config, scope config.Scope) {
+// It returns false if any step failed, so the caller can exit non-zero rather
+// than letting a script believe the refresh applied everything it declares.
+func runRefresh(cfg *config.Config, scope config.Scope) bool {
 	platforms := config.AllPlatforms()
 	totalLinked, totalRemoved, totalRebuilt, totalMerged := 0, 0, 0, 0
+	failed := 0
 
 	for _, itemType := range config.ItemTypes {
 		srcDir := cfg.SourceDir(itemType)
@@ -560,6 +563,7 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 				res, err := intsync.ApplySettings(srcDir, destDir, p)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  settings error [%s]: %v\n", p, err)
+					failed++
 					continue
 				}
 				totalMerged += res.Merged
@@ -588,6 +592,7 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 			res, err := intsync.SyncItems(allItems, existing, srcDir, destDir)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  relink error [%s/%s]: %v\n", p, itemType, err)
+				failed++
 				continue
 			}
 			totalLinked += res.Linked
@@ -596,6 +601,11 @@ func runRefresh(cfg *config.Config, scope config.Scope) {
 
 	fmt.Printf("\nRefresh complete. Re-linked %d item(s), removed %d broken link(s), rebuilt %d template(s), merged %d settings file(s).\n",
 		totalLinked, totalRemoved, totalRebuilt, totalMerged)
+	if failed > 0 {
+		fmt.Fprintf(os.Stderr, "%d step(s) failed; the declared state was not fully applied.\n", failed)
+		return false
+	}
+	return true
 }
 
 // --- Main ---
@@ -651,8 +661,8 @@ func main() {
 
 	if doUpdate {
 		runUpdate(cfg)
-		// --update composes with --status/--refresh in one invocation.
-		if !doStatus && !doRefresh {
+		// --update composes with --capture/--status/--refresh in one invocation.
+		if !doStatus && !doRefresh && !doCapture {
 			os.Exit(0)
 		}
 	}
@@ -672,7 +682,9 @@ func main() {
 		os.Exit(0)
 	}
 	if doRefresh {
-		runRefresh(cfg, scope)
+		if !runRefresh(cfg, scope) {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
