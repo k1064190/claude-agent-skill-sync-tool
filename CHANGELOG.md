@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-07-11
+
+### Fixed
+
+- `agents` / `rules` discovery now follows symlinked directories, including the
+  item-type directory itself. `filepath.Walk` does not follow symlinks, so a
+  source root whose `agents/` was a link into an external repo previously
+  discovered zero items. Skills already worked; this brings `.md` items to
+  parity so every item type can be curated as symlinks into cloned repos.
+  Symlink cycles are guarded the same way as in skill discovery.
+
 ## [0.6.0] - 2026-07-10
 
 ### Added

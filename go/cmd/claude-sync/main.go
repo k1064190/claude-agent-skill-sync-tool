@@ -110,29 +110,58 @@ func findLeafSkills(baseDir, dir string, skills *[]string, visited map[string]bo
 // --- .md file discovery (agents, commands, rules) ---
 
 // collectMdFiles walks srcDir recursively and returns sorted relative paths
-// for every *.md file found.
+// for every *.md file found. Unlike filepath.Walk it follows symlinked
+// directories — including srcDir itself — so an item-type directory can be a
+// link into an external repo.
 func collectMdFiles(srcDir string) ([]string, error) {
 	var items []string
+	if err := findMdFiles(srcDir, srcDir, &items, make(map[string]bool)); err != nil {
+		return nil, err
+	}
+	sort.Strings(items)
+	return items, nil
+}
 
-	err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+// findMdFiles recursively collects *.md paths relative to baseDir. ancestors
+// holds the canonical (symlink-resolved) directories on the current recursion
+// path, so a link pointing back at an ancestor terminates instead of recursing
+// forever. It is scoped to the path rather than the whole walk on purpose: two
+// links to the same directory are distinct, separately selectable items, and
+// deduplicating them globally would silently drop the second one.
+func findMdFiles(baseDir, dir string, items *[]string, ancestors map[string]bool) error {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
+	if ancestors[real] {
+		return nil // cycle: this directory is its own ancestor
+	}
+	ancestors[real] = true
+	defer delete(ancestors, real)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
+		if isDirEntry(dir, e) {
+			if err := findMdFiles(baseDir, path, items, ancestors); err != nil {
+				return err
+			}
+			continue
+		}
+		if !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		rel, err := filepath.Rel(baseDir, path)
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() && strings.HasSuffix(info.Name(), ".md") {
-			rel, relErr := filepath.Rel(srcDir, path)
-			if relErr != nil {
-				return relErr
-			}
-			items = append(items, rel)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		*items = append(*items, rel)
 	}
-
-	sort.Strings(items)
-	return items, nil
+	return nil
 }
 
 // --- Non-interactive maintenance modes ---
