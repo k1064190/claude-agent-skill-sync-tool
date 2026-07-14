@@ -16,11 +16,18 @@ import (
 // SettingsTargetName returns the settings file name for a platform, or "" if
 // the platform has no settings file this tool manages.
 //
-// Only Claude is supported today. The other agents' settings are not
-// interchangeable with it — Codex uses TOML (`config.toml`), Opencode declares
-// plugins as an array in `opencode.json`, and Antigravity splits config across
-// several files — so there is nothing shared to sync and each would need its
-// own format-aware writer.
+// Only Claude is supported, and deliberately so. Settings are not a shared
+// concept: Codex uses TOML (`config.toml`), Opencode lists plugins as an array
+// in `opencode.json`, and Antigravity spreads config across several files, so
+// there is no common fragment — each would need its own format-aware writer.
+//
+// More importantly, the thing that motivated fragments in the first place —
+// making the plugin set reproducible — does not generalise. Claude is the
+// outlier that needs a local declaration (`enabledPlugins`). Codex plugins
+// installed through its UI are bound to the ChatGPT account and appear in *no*
+// local file; `codex login` restores them on a new machine, so there is nothing
+// to version-control. Extending this to Codex was investigated and dropped; see
+// docs/claude-sync/stage-4/cross-agent-plugin-portability.md before trying again.
 func SettingsTargetName(platform config.Platform) string {
 	switch platform {
 	case config.PlatformClaude:
