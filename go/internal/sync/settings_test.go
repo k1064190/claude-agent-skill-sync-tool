@@ -76,6 +76,43 @@ func TestMergeSettingsContent(t *testing.T) {
 	}
 }
 
+// TestMergeSettingsContentPreservesKeyOrder verifies the live file's key order
+// survives a merge: owned keys are replaced where they already sit and new ones
+// are appended. Re-sorting the file would produce a huge spurious diff in a
+// dotfiles repo on the very first run.
+func TestMergeSettingsContentPreservesKeyOrder(t *testing.T) {
+	live := []byte(`{
+  "zebra": 1,
+  "enabledPlugins": {"a@m": true},
+  "alpha": 2
+}`)
+	fragment := []byte(`{"enabledPlugins": {"b@m": true}, "extraKnownMarketplaces": {"m": {}}}`)
+
+	merged, _, err := MergeSettingsContent(live, fragment)
+	if err != nil {
+		t.Fatalf("MergeSettingsContent: %v", err)
+	}
+
+	got, err := decodeOrderedObject(merged)
+	if err != nil {
+		t.Fatalf("merged output is not a JSON object: %v", err)
+	}
+	var keys []string
+	for _, f := range got {
+		keys = append(keys, f.Key)
+	}
+
+	want := []string{"zebra", "enabledPlugins", "alpha", "extraKnownMarketplaces"}
+	if len(keys) != len(want) {
+		t.Fatalf("keys = %v; want %v", keys, want)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Errorf("key[%d] = %q; want %q (live order must be preserved, new keys appended)", i, keys[i], want[i])
+		}
+	}
+}
+
 // TestMergeSettingsContentNoChange verifies an already-applied fragment reports
 // changed=false, so --refresh stays a no-op and writes no backup.
 func TestMergeSettingsContentNoChange(t *testing.T) {

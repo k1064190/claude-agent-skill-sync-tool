@@ -42,6 +42,90 @@ func SettingsSourceFile(platform config.Platform) string {
 	}
 }
 
+// jsonField is one top-level key/value pair of a settings document, kept in
+// file order.
+type jsonField struct {
+	Key string
+	Val json.RawMessage
+}
+
+// decodeOrderedObject decodes a JSON object preserving its key order. Go's maps
+// are unordered and MarshalIndent sorts keys, which would rewrite the user's
+// whole settings file on first run; keeping the original order means only the
+// keys we actually own show up in a diff. A duplicate key keeps its first
+// position and its last value, matching encoding/json's last-wins rule.
+func decodeOrderedObject(data []byte) ([]jsonField, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if tok != json.Delim('{') {
+		return nil, fmt.Errorf("expected a JSON object")
+	}
+
+	var fields []jsonField
+	index := map[string]int{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, fmt.Errorf("expected an object key, got %v", keyTok)
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, err
+		}
+		if i, seen := index[key]; seen {
+			fields[i].Val = raw
+			continue
+		}
+		index[key] = len(fields)
+		fields = append(fields, jsonField{Key: key, Val: raw})
+	}
+	if _, err := dec.Token(); err != nil { // closing brace
+		return nil, err
+	}
+	return fields, nil
+}
+
+// encodeOrderedObject renders fields as a 2-space-indented JSON object with a
+// trailing newline, preserving the given key order.
+func encodeOrderedObject(fields []jsonField) ([]byte, error) {
+	if len(fields) == 0 {
+		return []byte("{}\n"), nil
+	}
+	var buf bytes.Buffer
+	buf.WriteString("{\n")
+	for i, f := range fields {
+		key, err := json.Marshal(f.Key)
+		if err != nil {
+			return nil, err
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, f.Val); err != nil {
+			return nil, err
+		}
+		var value bytes.Buffer
+		if err := json.Indent(&value, compact.Bytes(), "  ", "  "); err != nil {
+			return nil, err
+		}
+		buf.WriteString("  ")
+		buf.Write(key)
+		buf.WriteString(": ")
+		buf.Write(value.Bytes())
+		if i < len(fields)-1 {
+			buf.WriteString(",")
+		}
+		buf.WriteString("\n")
+	}
+	buf.WriteString("}\n")
+	return buf.Bytes(), nil
+}
+
 // MergeSettingsContent injects a settings fragment into live settings content.
 //
 // Ownership semantics: every top-level key present in the fragment replaces the
@@ -64,37 +148,46 @@ func SettingsSourceFile(platform config.Platform) string {
 func MergeSettingsContent(live, fragment []byte) ([]byte, bool, error) {
 	// Decode into ordered-agnostic maps of raw values: nested content is copied
 	// through verbatim rather than re-shaped.
-	liveMap := map[string]json.RawMessage{}
+	var liveFields []jsonField
 	if len(bytes.TrimSpace(live)) > 0 {
-		if err := json.Unmarshal(live, &liveMap); err != nil {
+		var err error
+		if liveFields, err = decodeOrderedObject(live); err != nil {
 			return nil, false, fmt.Errorf("parse live settings: %w", err)
 		}
-		// A bare `null` unmarshals without error but leaves the map nil, which
-		// would panic on assignment below. It is not a settings object.
-		if liveMap == nil {
-			return nil, false, fmt.Errorf("parse live settings: expected a JSON object, got null")
+	}
+
+	fragFields, err := decodeOrderedObject(fragment)
+	if err != nil {
+		return nil, false, fmt.Errorf("parse settings fragment: %w", err)
+	}
+	owned := make(map[string]json.RawMessage, len(fragFields))
+	for _, f := range fragFields {
+		owned[f.Key] = f.Val
+	}
+
+	// Owned keys are replaced where they already sit; new ones are appended, so
+	// the live file's existing key order survives.
+	merged := make([]jsonField, 0, len(liveFields)+len(fragFields))
+	present := make(map[string]bool, len(liveFields))
+	for _, f := range liveFields {
+		present[f.Key] = true
+		if v, isOwned := owned[f.Key]; isOwned {
+			f.Val = v
+		}
+		merged = append(merged, f)
+	}
+	for _, f := range fragFields {
+		if !present[f.Key] {
+			merged = append(merged, f)
 		}
 	}
 
-	fragMap := map[string]json.RawMessage{}
-	if err := json.Unmarshal(fragment, &fragMap); err != nil {
-		return nil, false, fmt.Errorf("parse settings fragment: %w", err)
-	}
-	if fragMap == nil {
-		return nil, false, fmt.Errorf("parse settings fragment: expected a JSON object, got null")
-	}
-
-	for k, v := range fragMap {
-		liveMap[k] = v
-	}
-
-	merged, err := json.MarshalIndent(liveMap, "", "  ")
+	out, err := encodeOrderedObject(merged)
 	if err != nil {
 		return nil, false, fmt.Errorf("encode merged settings: %w", err)
 	}
-	merged = append(merged, '\n')
 
-	return merged, !equalJSON(live, merged), nil
+	return out, !equalJSON(live, out), nil
 }
 
 // CaptureSettingsContent is the reverse of MergeSettingsContent: it rewrites the
@@ -121,37 +214,36 @@ func MergeSettingsContent(live, fragment []byte) ([]byte, bool, error) {
 //	changed  (bool):   False if the fragment already matches the live values.
 //	err      (error):  Malformed JSON in either input, or nil.
 func CaptureSettingsContent(live, fragment []byte) ([]byte, bool, error) {
-	liveMap := map[string]json.RawMessage{}
+	var liveFields []jsonField
 	if len(bytes.TrimSpace(live)) > 0 {
-		if err := json.Unmarshal(live, &liveMap); err != nil {
+		var err error
+		if liveFields, err = decodeOrderedObject(live); err != nil {
 			return nil, false, fmt.Errorf("parse live settings: %w", err)
 		}
-		if liveMap == nil {
-			return nil, false, fmt.Errorf("parse live settings: expected a JSON object, got null")
-		}
+	}
+	liveByKey := make(map[string]json.RawMessage, len(liveFields))
+	for _, f := range liveFields {
+		liveByKey[f.Key] = f.Val
 	}
 
-	fragMap := map[string]json.RawMessage{}
-	if err := json.Unmarshal(fragment, &fragMap); err != nil {
+	fragFields, err := decodeOrderedObject(fragment)
+	if err != nil {
 		return nil, false, fmt.Errorf("parse settings fragment: %w", err)
 	}
-	if fragMap == nil {
-		return nil, false, fmt.Errorf("parse settings fragment: expected a JSON object, got null")
-	}
 
-	captured := map[string]json.RawMessage{}
-	for k := range fragMap {
-		if v, exists := liveMap[k]; exists {
-			captured[k] = v
+	// Walk the fragment's own key order: it defines what is owned, and capture
+	// never widens that set. An owned key absent from the live file is dropped.
+	captured := make([]jsonField, 0, len(fragFields))
+	for _, f := range fragFields {
+		if v, exists := liveByKey[f.Key]; exists {
+			captured = append(captured, jsonField{Key: f.Key, Val: v})
 		}
-		// An owned key missing from the live file is dropped.
 	}
 
-	out, err := json.MarshalIndent(captured, "", "  ")
+	out, err := encodeOrderedObject(captured)
 	if err != nil {
 		return nil, false, fmt.Errorf("encode captured fragment: %w", err)
 	}
-	out = append(out, '\n')
 
 	return out, !equalJSON(fragment, out), nil
 }
