@@ -224,7 +224,7 @@ func templateState(content, destPath string) string {
 // fragment applied: "applied", "pending" (the merge would change it), "missing"
 // (no fragment declared), or "error" (unreadable / malformed JSON).
 func settingsState(srcDir, destPath string, platform config.Platform) string {
-	fragment, err := os.ReadFile(filepath.Join(srcDir, settingsFragmentName(platform)))
+	fragment, err := os.ReadFile(filepath.Join(srcDir, intsync.SettingsSourceFile(platform)))
 	if err != nil {
 		return "missing"
 	}
@@ -240,15 +240,6 @@ func settingsState(srcDir, destPath string, platform config.Platform) string {
 		return "pending"
 	}
 	return "applied"
-}
-
-// settingsFragmentName mirrors the sync package's fragment naming so status can
-// look up the source file without applying it.
-func settingsFragmentName(platform config.Platform) string {
-	if intsync.SettingsTargetName(platform) == "" {
-		return ""
-	}
-	return strings.ToLower(string(platform)) + ".json"
 }
 
 // runStatus reports, for every platform and item type, how the destinations

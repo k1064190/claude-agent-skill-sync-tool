@@ -117,6 +117,95 @@ func TestMergeSettingsContentMalformedLive(t *testing.T) {
 	}
 }
 
+// TestApplySettingsPreservesModeAndBacksUpSecurely verifies that the live
+// file's permission bits survive the rewrite (the tool owns some keys, not the
+// file's mode) and that the backup is not world-readable.
+func TestApplySettingsPreservesModeAndBacksUpSecurely(t *testing.T) {
+	tempDir := t.TempDir()
+	srcDir := filepath.Join(tempDir, "settings")
+	destDir := filepath.Join(tempDir, ".claude")
+	for _, d := range []string{srcDir, destDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "claude.json"),
+		[]byte(`{"enabledPlugins": {"a@m": true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	destPath := filepath.Join(destDir, "settings.json")
+	if err := os.WriteFile(destPath, []byte(`{"theme": "light"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ApplySettings(srcDir, destDir, config.PlatformClaude); err != nil {
+		t.Fatalf("ApplySettings: %v", err)
+	}
+
+	info, err := os.Stat(destPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("settings.json mode = %#o; want 0600 preserved", got)
+	}
+
+	bak, err := os.Stat(destPath + ".bak")
+	if err != nil {
+		t.Fatalf("backup not created: %v", err)
+	}
+	if got := bak.Mode().Perm(); got != 0o600 {
+		t.Errorf("backup mode = %#o; want 0600", got)
+	}
+}
+
+// TestApplySettingsLeavesNoTempFiles guards the atomic-write path: a successful
+// merge must not leave scratch files next to the settings file.
+func TestApplySettingsLeavesNoTempFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	srcDir := filepath.Join(tempDir, "settings")
+	destDir := filepath.Join(tempDir, ".claude")
+	for _, d := range []string{srcDir, destDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "claude.json"),
+		[]byte(`{"enabledPlugins": {"a@m": true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destDir, "settings.json"),
+		[]byte(`{"theme": "light"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ApplySettings(srcDir, destDir, config.PlatformClaude); err != nil {
+		t.Fatalf("ApplySettings: %v", err)
+	}
+
+	entries, err := os.ReadDir(destDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"settings.json": true, "settings.json.bak": true}
+	for _, e := range entries {
+		if !want[e.Name()] {
+			t.Errorf("unexpected leftover file %q in destination", e.Name())
+		}
+	}
+}
+
+// TestSettingsSourceFile pins the fragment naming so the status path and the
+// apply path cannot drift apart — both must call this one function.
+func TestSettingsSourceFile(t *testing.T) {
+	if got := SettingsSourceFile(config.PlatformClaude); got != "claude.json" {
+		t.Errorf("SettingsSourceFile(Claude) = %q; want claude.json", got)
+	}
+	if got := SettingsSourceFile(config.PlatformCodex); got != "" {
+		t.Errorf("SettingsSourceFile(Codex) = %q; want \"\"", got)
+	}
+}
+
 // TestApplySettings exercises the on-disk path: merge the fragment into the
 // live file and report the outcome.
 func TestApplySettings(t *testing.T) {

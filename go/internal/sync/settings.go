@@ -30,9 +30,10 @@ func SettingsTargetName(platform config.Platform) string {
 	}
 }
 
-// settingsSourceFile returns the fragment file name under the settings source
-// directory for a platform, or "" if unsupported.
-func settingsSourceFile(platform config.Platform) string {
+// SettingsSourceFile returns the fragment file name under the settings source
+// directory for a platform, or "" if unsupported. Both the apply path and the
+// status path must use this single definition so they cannot drift apart.
+func SettingsSourceFile(platform config.Platform) string {
 	switch platform {
 	case config.PlatformClaude:
 		return "claude.json"
@@ -110,10 +111,49 @@ func equalJSON(a, b []byte) bool {
 	return bytes.Equal(ab, bb)
 }
 
+// readSettings reads the live settings file, treating "not found" as empty.
+// It also reports the file's permission bits so a rewrite can preserve them.
+func readSettings(path string) (content []byte, mode os.FileMode, err error) {
+	// Settings can hold tokens and machine config, so a file we create is
+	// owner-only. An existing file keeps whatever mode it already has — the
+	// tool owns certain keys, not the file's permissions.
+	mode = 0o600
+	info, err := os.Stat(path)
+	if err == nil {
+		mode = info.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return nil, mode, err
+	}
+
+	content, err = os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, mode, nil
+		}
+		return nil, mode, err
+	}
+	return content, mode, nil
+}
+
+// settingsWriteAttempts bounds the compare-and-swap retry loop in ApplySettings.
+const settingsWriteAttempts = 3
+
 // ApplySettings merges the platform's fragment from srcDir into its live
-// settings file under destDir. It backs the live file up to <file>.bak before
-// overwriting and aborts that write if the backup cannot be created, so a
-// hand-maintained settings file is never destroyed without a copy.
+// settings file under destDir.
+//
+// The live file is shared with the agent itself — Claude Code rewrites
+// settings.json when the user changes model, effort, theme, and so on — so the
+// write is defensive on three counts:
+//
+//   - Atomic: the merged content is written to a temp file in the same
+//     directory and renamed over the target, so a crash or full disk can never
+//     leave a truncated settings file behind.
+//   - Compare-and-swap: the file is re-read immediately before the rename and
+//     the merge is redone if it changed underneath us, so a concurrent write is
+//     folded in rather than clobbered. This narrows but cannot fully close the
+//     race, since the agent does not take a lock we could share.
+//   - Backed up: the exact content being replaced is copied to <file>.bak first,
+//     and the write is abandoned if that backup cannot be made.
 //
 // Args:
 //
@@ -129,7 +169,7 @@ func ApplySettings(srcDir, destDir string, platform config.Platform) (Result, er
 	var res Result
 
 	target := SettingsTargetName(platform)
-	srcName := settingsSourceFile(platform)
+	srcName := SettingsSourceFile(platform)
 	if target == "" || srcName == "" {
 		return res, nil // platform has no managed settings file
 	}
@@ -142,36 +182,75 @@ func ApplySettings(srcDir, destDir string, platform config.Platform) (Result, er
 		return res, fmt.Errorf("read settings fragment: %w", err)
 	}
 
-	destPath := filepath.Join(destDir, target)
-	live, err := os.ReadFile(destPath)
-	if err != nil && !os.IsNotExist(err) {
-		return res, fmt.Errorf("read %s: %w", destPath, err)
-	}
-
-	merged, changed, err := MergeSettingsContent(live, fragment)
-	if err != nil {
-		return res, fmt.Errorf("%s: %w", destPath, err)
-	}
-	if !changed {
-		return res, nil
-	}
-
-	if len(live) > 0 {
-		if err := os.WriteFile(destPath+".bak", live, 0o600); err != nil {
-			return res, fmt.Errorf("back up %s: %w", destPath, err)
-		}
-		fmt.Printf("  backed up: %s.bak\n", destPath)
-	}
-
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return res, fmt.Errorf("mkdir -p %s: %w", destDir, err)
 	}
-	// Settings can hold tokens and machine config: keep it owner-only.
-	if err := os.WriteFile(destPath, merged, 0o600); err != nil {
-		return res, fmt.Errorf("write %s: %w", destPath, err)
-	}
+	destPath := filepath.Join(destDir, target)
 
-	fmt.Printf("  merged: %s\n", destPath)
-	res.Merged++
-	return res, nil
+	for attempt := 1; ; attempt++ {
+		live, mode, err := readSettings(destPath)
+		if err != nil {
+			return res, fmt.Errorf("read %s: %w", destPath, err)
+		}
+
+		merged, changed, err := MergeSettingsContent(live, fragment)
+		if err != nil {
+			return res, fmt.Errorf("%s: %w", destPath, err)
+		}
+		if !changed {
+			return res, nil // already applied: write nothing at all
+		}
+
+		// Stage the new content beside the target so the rename is atomic.
+		tmp, err := os.CreateTemp(destDir, target+".tmp*")
+		if err != nil {
+			return res, fmt.Errorf("stage %s: %w", destPath, err)
+		}
+		tmpPath := tmp.Name()
+		writeErr := func() error {
+			defer tmp.Close()
+			if _, err := tmp.Write(merged); err != nil {
+				return err
+			}
+			return tmp.Chmod(mode)
+		}()
+		if writeErr != nil {
+			os.Remove(tmpPath)
+			return res, fmt.Errorf("stage %s: %w", destPath, writeErr)
+		}
+
+		// Re-read just before committing: if the agent rewrote the file while we
+		// were merging, redo the merge on top of its version instead of
+		// discarding it.
+		current, _, err := readSettings(destPath)
+		if err != nil {
+			os.Remove(tmpPath)
+			return res, fmt.Errorf("re-read %s: %w", destPath, err)
+		}
+		if !bytes.Equal(current, live) {
+			os.Remove(tmpPath)
+			if attempt < settingsWriteAttempts {
+				continue
+			}
+			return res, fmt.Errorf("%s kept changing underneath us after %d attempts; not writing",
+				destPath, settingsWriteAttempts)
+		}
+
+		if len(live) > 0 {
+			if err := os.WriteFile(destPath+".bak", live, 0o600); err != nil {
+				os.Remove(tmpPath)
+				return res, fmt.Errorf("back up %s: %w", destPath, err)
+			}
+			fmt.Printf("  backed up: %s.bak\n", destPath)
+		}
+
+		if err := os.Rename(tmpPath, destPath); err != nil {
+			os.Remove(tmpPath)
+			return res, fmt.Errorf("write %s: %w", destPath, err)
+		}
+
+		fmt.Printf("  merged: %s\n", destPath)
+		res.Merged++
+		return res, nil
+	}
 }
