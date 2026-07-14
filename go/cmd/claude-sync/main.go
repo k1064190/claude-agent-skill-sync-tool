@@ -226,7 +226,10 @@ func templateState(content, destPath string) string {
 func settingsState(srcDir, destPath string, platform config.Platform) string {
 	fragment, err := os.ReadFile(filepath.Join(srcDir, intsync.SettingsSourceFile(platform)))
 	if err != nil {
-		return "missing"
+		if os.IsNotExist(err) {
+			return "missing" // no fragment declared for this platform
+		}
+		return "error" // declared but unreadable — --refresh would fail
 	}
 	live, err := os.ReadFile(destPath)
 	if err != nil && !os.IsNotExist(err) {

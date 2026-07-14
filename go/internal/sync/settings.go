@@ -69,11 +69,19 @@ func MergeSettingsContent(live, fragment []byte) ([]byte, bool, error) {
 		if err := json.Unmarshal(live, &liveMap); err != nil {
 			return nil, false, fmt.Errorf("parse live settings: %w", err)
 		}
+		// A bare `null` unmarshals without error but leaves the map nil, which
+		// would panic on assignment below. It is not a settings object.
+		if liveMap == nil {
+			return nil, false, fmt.Errorf("parse live settings: expected a JSON object, got null")
+		}
 	}
 
 	fragMap := map[string]json.RawMessage{}
 	if err := json.Unmarshal(fragment, &fragMap); err != nil {
 		return nil, false, fmt.Errorf("parse settings fragment: %w", err)
+	}
+	if fragMap == nil {
+		return nil, false, fmt.Errorf("parse settings fragment: expected a JSON object, got null")
 	}
 
 	for k, v := range fragMap {
@@ -187,6 +195,16 @@ func ApplySettings(srcDir, destDir string, platform config.Platform) (Result, er
 	}
 	destPath := filepath.Join(destDir, target)
 
+	// If the settings file is a symlink (a dotfiles-managed setup), write
+	// through to its target. Renaming onto the link path would replace the link
+	// with a regular file and silently detach the user's tracked settings.
+	if resolved, err := filepath.EvalSymlinks(destPath); err == nil {
+		destPath = resolved
+	} else if !os.IsNotExist(err) {
+		return res, fmt.Errorf("resolve %s: %w", destPath, err)
+	}
+	writeDir := filepath.Dir(destPath)
+
 	for attempt := 1; ; attempt++ {
 		live, mode, err := readSettings(destPath)
 		if err != nil {
@@ -201,18 +219,26 @@ func ApplySettings(srcDir, destDir string, platform config.Platform) (Result, er
 			return res, nil // already applied: write nothing at all
 		}
 
-		// Stage the new content beside the target so the rename is atomic.
-		tmp, err := os.CreateTemp(destDir, target+".tmp*")
+		// Stage the new content beside the target so the rename is atomic (and
+		// lands on the same filesystem).
+		tmp, err := os.CreateTemp(writeDir, target+".tmp*")
 		if err != nil {
 			return res, fmt.Errorf("stage %s: %w", destPath, err)
 		}
 		tmpPath := tmp.Name()
+		// Close explicitly rather than deferring: filesystems such as NFS and
+		// quota-backed mounts surface write failures only on Close, and renaming
+		// a partially written file would defeat the point of staging it.
 		writeErr := func() error {
-			defer tmp.Close()
 			if _, err := tmp.Write(merged); err != nil {
+				tmp.Close()
 				return err
 			}
-			return tmp.Chmod(mode)
+			if err := tmp.Chmod(mode); err != nil {
+				tmp.Close()
+				return err
+			}
+			return tmp.Close()
 		}()
 		if writeErr != nil {
 			os.Remove(tmpPath)
@@ -237,11 +263,19 @@ func ApplySettings(srcDir, destDir string, platform config.Platform) (Result, er
 		}
 
 		if len(live) > 0 {
-			if err := os.WriteFile(destPath+".bak", live, 0o600); err != nil {
+			// Remove any stale backup first: os.WriteFile does not apply its mode
+			// to an existing file, so a world-readable leftover .bak would keep
+			// its permissions while receiving the settings content.
+			bakPath := destPath + ".bak"
+			if err := os.Remove(bakPath); err != nil && !os.IsNotExist(err) {
+				os.Remove(tmpPath)
+				return res, fmt.Errorf("replace stale backup %s: %w", bakPath, err)
+			}
+			if err := os.WriteFile(bakPath, live, 0o600); err != nil {
 				os.Remove(tmpPath)
 				return res, fmt.Errorf("back up %s: %w", destPath, err)
 			}
-			fmt.Printf("  backed up: %s.bak\n", destPath)
+			fmt.Printf("  backed up: %s\n", bakPath)
 		}
 
 		if err := os.Rename(tmpPath, destPath); err != nil {

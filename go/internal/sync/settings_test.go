@@ -117,6 +117,111 @@ func TestMergeSettingsContentMalformedLive(t *testing.T) {
 	}
 }
 
+// TestMergeSettingsContentNullLive verifies that a settings file containing a
+// bare `null` is rejected rather than panicking on a nil map assignment.
+func TestMergeSettingsContentNullLive(t *testing.T) {
+	if _, _, err := MergeSettingsContent([]byte(`null`), []byte(`{"a": 1}`)); err == nil {
+		t.Error("expected an error for a null live settings file, got nil")
+	}
+	if _, _, err := MergeSettingsContent([]byte(`{}`), []byte(`null`)); err == nil {
+		t.Error("expected an error for a null fragment, got nil")
+	}
+}
+
+// TestApplySettingsWritesThroughSymlink verifies that a dotfiles-managed
+// settings.json (a symlink) keeps its link: the merge must write through to the
+// link target instead of replacing the link with a regular file.
+func TestApplySettingsWritesThroughSymlink(t *testing.T) {
+	tempDir := t.TempDir()
+	srcDir := filepath.Join(tempDir, "settings")
+	destDir := filepath.Join(tempDir, ".claude")
+	store := filepath.Join(tempDir, "dotfiles")
+	for _, d := range []string{srcDir, destDir, store} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "claude.json"),
+		[]byte(`{"enabledPlugins": {"a@m": true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The real file lives in the dotfiles store; ~/.claude/settings.json links to it.
+	real := filepath.Join(store, "claude-settings.json")
+	if err := os.WriteFile(real, []byte(`{"theme": "light"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(destDir, "settings.json")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ApplySettings(srcDir, destDir, config.PlatformClaude); err != nil {
+		t.Fatalf("ApplySettings: %v", err)
+	}
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("settings.json is no longer a symlink; the link was replaced by a regular file")
+	}
+
+	data, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("link target is not valid JSON: %v", err)
+	}
+	if _, exists := got["enabledPlugins"]; !exists {
+		t.Error("fragment was not written through to the link target")
+	}
+	if got["theme"] != "light" {
+		t.Error("link target lost its unowned keys")
+	}
+}
+
+// TestApplySettingsReplacesPermissiveBackup verifies that a stale world-readable
+// .bak is not merely truncated (which would keep its mode) but replaced 0600.
+func TestApplySettingsReplacesPermissiveBackup(t *testing.T) {
+	tempDir := t.TempDir()
+	srcDir := filepath.Join(tempDir, "settings")
+	destDir := filepath.Join(tempDir, ".claude")
+	for _, d := range []string{srcDir, destDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "claude.json"),
+		[]byte(`{"enabledPlugins": {"a@m": true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destDir, "settings.json"),
+		[]byte(`{"theme": "light"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A stale, world-readable backup from some earlier manual copy.
+	bak := filepath.Join(destDir, "settings.json.bak")
+	if err := os.WriteFile(bak, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ApplySettings(srcDir, destDir, config.PlatformClaude); err != nil {
+		t.Fatalf("ApplySettings: %v", err)
+	}
+
+	info, err := os.Stat(bak)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("backup mode = %#o; want 0600 (a stale permissive backup must be replaced, not truncated)", got)
+	}
+}
+
 // TestApplySettingsPreservesModeAndBacksUpSecurely verifies that the live
 // file's permission bits survive the rewrite (the tool owns some keys, not the
 // file's mode) and that the backup is not world-readable.
