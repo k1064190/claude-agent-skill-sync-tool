@@ -110,6 +110,47 @@ func TestCollectMdFilesFollowsSymlinks(t *testing.T) {
 	}
 }
 
+// TestCollectMdFilesAliasedSymlinks verifies that two symlinks pointing at the
+// same external directory both yield their items: cycle protection must only
+// bound the ancestor chain, not deduplicate directories reached by different
+// paths (which are distinct, separately selectable sync items).
+func TestCollectMdFilesAliasedSymlinks(t *testing.T) {
+	tempDir := t.TempDir()
+
+	external := filepath.Join(tempDir, "external")
+	if err := os.MkdirAll(external, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(external, "a.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srcDir := filepath.Join(tempDir, "agents")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"one", "two"} {
+		if err := os.Symlink(external, filepath.Join(srcDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	items, err := collectMdFiles(srcDir)
+	if err != nil {
+		t.Fatalf("collectMdFiles: %v", err)
+	}
+
+	want := []string{filepath.Join("one", "a.md"), filepath.Join("two", "a.md")}
+	if len(items) != len(want) {
+		t.Fatalf("collectMdFiles = %v; want %v", items, want)
+	}
+	for i := range want {
+		if items[i] != want[i] {
+			t.Errorf("collectMdFiles[%d] = %q; want %q", i, items[i], want[i])
+		}
+	}
+}
+
 // TestCollectMdFilesSymlinkCycle verifies that a symlink pointing back at an
 // ancestor does not cause unbounded recursion in .md discovery.
 func TestCollectMdFilesSymlinkCycle(t *testing.T) {

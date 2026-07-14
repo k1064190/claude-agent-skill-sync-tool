@@ -122,18 +122,22 @@ func collectMdFiles(srcDir string) ([]string, error) {
 	return items, nil
 }
 
-// findMdFiles recursively collects *.md paths relative to baseDir. visited
-// holds canonical (symlink-resolved) directory paths already traversed, so a
-// link pointing back at an ancestor terminates instead of recursing forever.
-func findMdFiles(baseDir, dir string, items *[]string, visited map[string]bool) error {
+// findMdFiles recursively collects *.md paths relative to baseDir. ancestors
+// holds the canonical (symlink-resolved) directories on the current recursion
+// path, so a link pointing back at an ancestor terminates instead of recursing
+// forever. It is scoped to the path rather than the whole walk on purpose: two
+// links to the same directory are distinct, separately selectable items, and
+// deduplicating them globally would silently drop the second one.
+func findMdFiles(baseDir, dir string, items *[]string, ancestors map[string]bool) error {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return err
 	}
-	if visited[real] {
-		return nil
+	if ancestors[real] {
+		return nil // cycle: this directory is its own ancestor
 	}
-	visited[real] = true
+	ancestors[real] = true
+	defer delete(ancestors, real)
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -143,7 +147,7 @@ func findMdFiles(baseDir, dir string, items *[]string, visited map[string]bool) 
 	for _, e := range entries {
 		path := filepath.Join(dir, e.Name())
 		if isDirEntry(dir, e) {
-			if err := findMdFiles(baseDir, path, items, visited); err != nil {
+			if err := findMdFiles(baseDir, path, items, ancestors); err != nil {
 				return err
 			}
 			continue
