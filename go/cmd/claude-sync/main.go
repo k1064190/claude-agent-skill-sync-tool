@@ -512,6 +512,24 @@ func runUpdate(cfg *config.Config) {
 	fmt.Printf("\nUpdate complete. Pulled %d repo(s), %d failed.\n", len(repos)-failed, failed)
 }
 
+// clobberSafeRules returns the subset of rules whose destination is safe to
+// (re)link — absent, or already a symlink this tool manages — and warns about
+// any whose destination is a real file we must never delete. ~/.codex/rules/ is
+// shared: Codex ships default.rules and a guard may install remote-guard.rules,
+// so a source rule that happens to share a name must not clobber the real file.
+func clobberSafeRules(rules []string, destDir string) map[string]bool {
+	safe := make(map[string]bool, len(rules))
+	for _, r := range rules {
+		dest := filepath.Join(destDir, r)
+		if info, err := os.Lstat(dest); err == nil && info.Mode()&os.ModeSymlink == 0 {
+			fmt.Fprintf(os.Stderr, "  skipped %s (a real file already exists there — refusing to overwrite it)\n", dest)
+			continue
+		}
+		safe[r] = true
+	}
+	return safe
+}
+
 // removeDanglingLinks deletes symlinks under destDir that point into srcDir but
 // whose target no longer resolves (the source item was deleted or renamed).
 // These are the broken links --status reports; refresh cleans them so the two
@@ -596,17 +614,14 @@ func runRefresh(cfg *config.Config, scope config.Scope) bool {
 				failed++
 				continue
 			}
-			selectAll := make(map[string]bool, len(allRules))
-			for _, r := range allRules {
-				selectAll[r] = true
-			}
 			for _, p := range platforms {
 				destDir := config.PlatformDestDir(p, scope, itemType)
 				if destDir == "" {
 					continue // platform has no execpolicy rules dir
 				}
 				totalRemoved += removeDanglingLinks(srcDir, destDir)
-				res, err := intsync.SyncItems(allRules, selectAll, srcDir, destDir)
+				selected := clobberSafeRules(allRules, destDir)
+				res, err := intsync.SyncItems(allRules, selected, srcDir, destDir)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  link error [codex-rules]: %v\n", err)
 					failed++
@@ -783,10 +798,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error scanning codex-rules: %v\n", err)
 			os.Exit(1)
 		}
-		selectAll := make(map[string]bool, len(allRules))
-		for _, r := range allRules {
-			selectAll[r] = true
-		}
 		total := 0
 		for _, p := range platforms {
 			destDir := config.PlatformDestDir(p, scope, itemType)
@@ -798,7 +809,9 @@ func main() {
 				fmt.Fprintf(os.Stderr, "  mkdir error [%s]: %v\n", p, err)
 				continue
 			}
-			res, err := intsync.SyncItems(allRules, selectAll, srcDir, destDir)
+			removeDanglingLinks(srcDir, destDir)
+			selected := clobberSafeRules(allRules, destDir)
+			res, err := intsync.SyncItems(allRules, selected, srcDir, destDir)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  link error [%s]: %v\n", p, err)
 				continue

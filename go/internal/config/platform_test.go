@@ -24,6 +24,10 @@ func TestPlatformDestDir(t *testing.T) {
 		{PlatformAntigravity, ScopeProject, "skills", filepath.Join(".agents", "skills")},
 		{PlatformAntigravity, ScopeProject, "rules", filepath.Join(".agents", "rules")},
 		{PlatformCodex, ScopeProject, "agents", filepath.Join(".codex", "agents")},
+		// codex-rules is user-global regardless of scope: Codex enforces from
+		// ~/.codex/rules/ only, so project scope must NOT point at ./.codex/rules.
+		{PlatformCodex, ScopeUser, "codex-rules", filepath.Join(".codex", "rules")},
+		{PlatformCodex, ScopeProject, "codex-rules", filepath.Join(".codex", "rules")},
 		{PlatformOpencode, ScopeUser, "templates", filepath.Join(".config", "opencode")},
 		{PlatformClaude, ScopeProject, "templates", "."},      // Project root
 		{PlatformAntigravity, ScopeProject, "templates", "."}, // Project root
