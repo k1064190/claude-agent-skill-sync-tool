@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0] - 2026-07-15
+
+### Added
+
+- `codex-rules` item type: symlinks Codex execpolicy `.rules` files from the
+  source root into `~/.codex/rules/` (Codex only). These are runtime-enforced,
+  sandbox-independent deny rules — `forbidden` decisions reject a command at the
+  exec layer. All-or-nothing (not tree-selected); `--refresh` links every rule
+  file and clears dangling ones, preserving other rule files in the directory.
+
+
 ## [0.9.0] - 2026-07-15
 
 ### Added
