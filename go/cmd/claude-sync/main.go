@@ -114,21 +114,32 @@ func findLeafSkills(baseDir, dir string, skills *[]string, visited map[string]bo
 // directories — including srcDir itself — so an item-type directory can be a
 // link into an external repo.
 func collectMdFiles(srcDir string) ([]string, error) {
+	return collectFilesBySuffix(srcDir, ".md")
+}
+
+// collectRuleFiles is the codex-rules equivalent: it returns every *.rules file
+// (Codex execpolicy policy files) under srcDir, symlink-following.
+func collectRuleFiles(srcDir string) ([]string, error) {
+	return collectFilesBySuffix(srcDir, ".rules")
+}
+
+func collectFilesBySuffix(srcDir, suffix string) ([]string, error) {
 	var items []string
-	if err := findMdFiles(srcDir, srcDir, &items, make(map[string]bool)); err != nil {
+	if err := findFilesBySuffix(srcDir, srcDir, suffix, &items, make(map[string]bool)); err != nil {
 		return nil, err
 	}
 	sort.Strings(items)
 	return items, nil
 }
 
-// findMdFiles recursively collects *.md paths relative to baseDir. ancestors
-// holds the canonical (symlink-resolved) directories on the current recursion
-// path, so a link pointing back at an ancestor terminates instead of recursing
-// forever. It is scoped to the path rather than the whole walk on purpose: two
-// links to the same directory are distinct, separately selectable items, and
-// deduplicating them globally would silently drop the second one.
-func findMdFiles(baseDir, dir string, items *[]string, ancestors map[string]bool) error {
+// findFilesBySuffix recursively collects paths ending in suffix, relative to
+// baseDir. ancestors holds the canonical (symlink-resolved) directories on the
+// current recursion path, so a link pointing back at an ancestor terminates
+// instead of recursing forever. It is scoped to the path rather than the whole
+// walk on purpose: two links to the same directory are distinct, separately
+// selectable items, and deduplicating them globally would silently drop the
+// second one.
+func findFilesBySuffix(baseDir, dir, suffix string, items *[]string, ancestors map[string]bool) error {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return err
@@ -147,12 +158,12 @@ func findMdFiles(baseDir, dir string, items *[]string, ancestors map[string]bool
 	for _, e := range entries {
 		path := filepath.Join(dir, e.Name())
 		if isDirEntry(dir, e) {
-			if err := findMdFiles(baseDir, path, items, ancestors); err != nil {
+			if err := findFilesBySuffix(baseDir, path, suffix, items, ancestors); err != nil {
 				return err
 			}
 			continue
 		}
-		if !strings.HasSuffix(e.Name(), ".md") {
+		if !strings.HasSuffix(e.Name(), suffix) {
 			continue
 		}
 		rel, err := filepath.Rel(baseDir, path)
@@ -323,6 +334,9 @@ func runStatus(cfg *config.Config, scope config.Scope) {
 
 		for _, p := range platforms {
 			destDir := config.PlatformDestDir(p, scope, itemType)
+			if destDir == "" {
+				continue // platform has no target for this item type (e.g. codex-rules on non-Codex)
+			}
 			linked, broken := scanLinks(srcDir, destDir)
 			fmt.Printf("  %-12s linked=%-3d broken=%-3d %s\n", p, linked, broken, destDir)
 		}
@@ -571,6 +585,38 @@ func runRefresh(cfg *config.Config, scope config.Scope) bool {
 			continue
 		}
 
+		// Codex execpolicy rules are all-or-nothing safety policy, not a
+		// tree-selected subset: refresh ensures EVERY rule file is linked into
+		// ~/.codex/rules/ (and clears dangling ones), rather than only re-linking
+		// a prior selection. Codex-only.
+		if itemType == "codex-rules" {
+			allRules, err := collectRuleFiles(srcDir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  scan error [codex-rules]: %v\n", err)
+				failed++
+				continue
+			}
+			selectAll := make(map[string]bool, len(allRules))
+			for _, r := range allRules {
+				selectAll[r] = true
+			}
+			for _, p := range platforms {
+				destDir := config.PlatformDestDir(p, scope, itemType)
+				if destDir == "" {
+					continue // platform has no execpolicy rules dir
+				}
+				totalRemoved += removeDanglingLinks(srcDir, destDir)
+				res, err := intsync.SyncItems(allRules, selectAll, srcDir, destDir)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  link error [codex-rules]: %v\n", err)
+					failed++
+					continue
+				}
+				totalLinked += res.Linked
+			}
+			continue
+		}
+
 		var allItems []string
 		var err error
 		if itemType == "skills" {
@@ -584,6 +630,9 @@ func runRefresh(cfg *config.Config, scope config.Scope) bool {
 		}
 		for _, p := range platforms {
 			destDir := config.PlatformDestDir(p, scope, itemType)
+			if destDir == "" {
+				continue
+			}
 			totalRemoved += removeDanglingLinks(srcDir, destDir)
 			existing := config.ExistingSymlinks(allItems, srcDir, destDir)
 			if len(existing) == 0 {
@@ -723,6 +772,42 @@ func main() {
 		fmt.Printf("    - [%s] %s\n", p, displayPath)
 	}
 	fmt.Println()
+
+	// --- Codex Rules Bypass ---
+	// Execpolicy rules are all-or-nothing safety policy: link every .rules file
+	// into ~/.codex/rules/ (Codex only), no tree selection.
+	if itemType == "codex-rules" {
+		fmt.Printf("\nLinking Codex execpolicy rules...\n")
+		allRules, err := collectRuleFiles(srcDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error scanning codex-rules: %v\n", err)
+			os.Exit(1)
+		}
+		selectAll := make(map[string]bool, len(allRules))
+		for _, r := range allRules {
+			selectAll[r] = true
+		}
+		total := 0
+		for _, p := range platforms {
+			destDir := config.PlatformDestDir(p, scope, itemType)
+			if destDir == "" {
+				fmt.Printf("  skipped %s (no execpolicy rules directory)\n", p)
+				continue
+			}
+			if err := os.MkdirAll(destDir, 0o755); err != nil {
+				fmt.Fprintf(os.Stderr, "  mkdir error [%s]: %v\n", p, err)
+				continue
+			}
+			res, err := intsync.SyncItems(allRules, selectAll, srcDir, destDir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  link error [%s]: %v\n", p, err)
+				continue
+			}
+			total += res.Linked
+		}
+		fmt.Printf("\nDone. Linked %d Codex rule file(s).\n", total)
+		os.Exit(0)
+	}
 
 	// --- Settings Merge Bypass ---
 	// Settings are injected, not symlinked, so there is no tree to pick from.

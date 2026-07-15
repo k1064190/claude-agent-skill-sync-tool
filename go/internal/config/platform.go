@@ -52,6 +52,16 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 		itemType = ""
 	}
 
+	// Codex execpolicy rules are Codex-only; they are symlinked into the
+	// runtime-enforced ~/.codex/rules/ directory. Other platforms have no
+	// equivalent, so the caller skips them (empty destination).
+	if itemType == "codex-rules" {
+		if platform != PlatformCodex {
+			return ""
+		}
+		return filepath.Clean(filepath.Join(base, ".codex", "rules"))
+	}
+
 	// For Project Scope templates, the destination is the project root itself
 	// (e.g. ./CLAUDE.md, ./GEMINI.md, ./AGENTS.md)
 	if scope == ScopeProject && isTemplate {

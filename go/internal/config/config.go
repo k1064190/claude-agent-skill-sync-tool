@@ -30,7 +30,7 @@ type Config struct {
 }
 
 // ItemTypes lists the supported sync targets in display order.
-var ItemTypes = []string{"skills", "agents", "rules", "templates", "settings"}
+var ItemTypes = []string{"skills", "agents", "rules", "templates", "settings", "codex-rules"}
 
 // SourceDir returns the absolute path to the source directory for the given
 // item type (e.g. "skills" → "<root>/skills").

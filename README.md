@@ -63,7 +63,8 @@ The tool asks for a **source root** containing your assets.
 ├── agents/           # Agent .md files (platform-specific routing)
 ├── rules/            # Rule .md files
 ├── templates/        # Configuration templates (common.md + platform.md)
-└── settings/         # Settings fragments merged into each platform's settings file
+├── settings/         # Settings fragments merged into each platform's settings file
+└── codex-rules/      # Codex execpolicy .rules → ~/.codex/rules/ (deterministic command blocks)
 ```
 
 Entries under `skills/` (and the other item directories) may be **symlinks into
