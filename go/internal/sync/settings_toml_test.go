@@ -139,6 +139,75 @@ trust_level = "trusted"
 	}
 }
 
+// P1 #1 (review): a top-level multi-line string whose continuation line starts
+// with '[' must NOT be mistaken for a table header. The line-based surgery cannot
+// safely edit around a top-level multi-line string, so it refuses rather than
+// corrupt the file.
+func TestMergeTomlRefusesTopLevelMultilineString(t *testing.T) {
+	live := `description = """
+[projects]
+trust = yes
+"""
+model = "gpt-5"
+
+[real_table]
+x = 1
+`
+	if _, _, err := MergeTomlSettingsContent([]byte(live), []byte(`sandbox_mode = "workspace-write"`)); err == nil {
+		t.Error("expected a refusal for a top-level multi-line string, got nil (risk of corruption)")
+	}
+}
+
+// A multi-line string inside a [table] (not the top-level region) is fine — it
+// is in the preserved-verbatim tables section and never parsed.
+func TestMergeTomlAllowsMultilineInsideTable(t *testing.T) {
+	live := `model = "gpt-5"
+
+[some_table]
+note = """
+[not a table]
+"""
+`
+	merged, _, err := MergeTomlSettingsContent([]byte(live), []byte(`sandbox_mode = "workspace-write"`))
+	if err != nil {
+		t.Fatalf("multi-line string inside a table should be preserved, got error: %v", err)
+	}
+	if !strings.Contains(string(merged), "[not a table]") {
+		t.Error("multi-line string content inside a table was not preserved")
+	}
+	// sandbox_mode must be appended before the first table.
+	if strings.Index(string(merged), "sandbox_mode") > strings.Index(string(merged), "[some_table]") {
+		t.Error("owned key placed after a table header")
+	}
+}
+
+// P1 #2 (review): an inline comment on a fragment value must be stripped, not
+// carried into the value.
+func TestMergeTomlStripsFragmentInlineComment(t *testing.T) {
+	merged, _, err := MergeTomlSettingsContent(nil, []byte(`sandbox_mode = "workspace-write"  # new mode`))
+	if err != nil {
+		t.Fatalf("MergeTomlSettingsContent: %v", err)
+	}
+	got := string(merged)
+	if !strings.Contains(got, `sandbox_mode = "workspace-write"`) {
+		t.Errorf("value not written correctly: %q", got)
+	}
+	if strings.Contains(got, "# new mode") {
+		t.Error("fragment inline comment leaked into the written value")
+	}
+}
+
+// A '#' inside a quoted value is part of the value, not a comment.
+func TestMergeTomlKeepsHashInsideQuotes(t *testing.T) {
+	merged, _, err := MergeTomlSettingsContent(nil, []byte(`token = "abc#123"`))
+	if err != nil {
+		t.Fatalf("MergeTomlSettingsContent: %v", err)
+	}
+	if !strings.Contains(string(merged), `token = "abc#123"`) {
+		t.Errorf("hash inside quotes was wrongly stripped: %q", merged)
+	}
+}
+
 // A comment attached to an owned key, and preamble comments in general, must be
 // preserved (we only rewrite the assignment line).
 func TestMergeTomlPreservesComments(t *testing.T) {

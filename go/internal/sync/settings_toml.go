@@ -10,19 +10,50 @@ import (
 	"strings"
 )
 
-// A top-level key assignment: an optional-indent key, then '='. TOML top-level
-// keys can only appear before the first [table] header, so the whole owned
-// region is the file's preamble.
-var tomlAssignRe = regexp.MustCompile(`^[ \t]*([A-Za-z0-9_.-]+)[ \t]*=`)
+// A top-level key assignment: an optional-indent key (bare, dotted, or quoted),
+// then '='. TOML top-level keys can only appear before the first [table] header,
+// so the whole owned region is the file's preamble.
+var tomlAssignRe = regexp.MustCompile(`^[ \t]*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_.-]+)[ \t]*=`)
 
 // tomlTableRe matches a table or array-of-tables header line ([x] or [[x]]).
 var tomlTableRe = regexp.MustCompile(`^[ \t]*\[`)
 
+// stripTomlInlineComment returns s truncated at the first '#' that is not inside
+// a quoted string, right-trimmed. TOML comments run to end-of-line unless the
+// '#' sits inside a basic ("...") or literal ('...') string.
+func stripTomlInlineComment(s string) string {
+	inBasic, inLiteral, esc := false, false, false
+	for i, r := range s {
+		switch {
+		case inBasic:
+			if esc {
+				esc = false
+			} else if r == '\\' {
+				esc = true
+			} else if r == '"' {
+				inBasic = false
+			}
+		case inLiteral:
+			if r == '\'' {
+				inLiteral = false
+			}
+		case r == '"':
+			inBasic = true
+		case r == '\'':
+			inLiteral = true
+		case r == '#':
+			return strings.TrimSpace(s[:i])
+		}
+	}
+	return strings.TrimSpace(s)
+}
+
 // tomlOwnedKeys extracts the ordered (key, valueText) pairs a fragment declares.
-// The fragment must contain only top-level keys — a table header means it is
-// trying to own a machine-specific section, which is rejected. valueText is the
-// verbatim right-hand side (quotes, arrays, and all), so no TOML type parsing is
-// needed and unusual values pass through unchanged.
+// The fragment must contain only single-line top-level keys — a table header
+// means it is trying to own a machine-specific section, and a multi-line value
+// (an unterminated `"""`/`”'`) cannot be edited by line surgery — so both are
+// rejected. The value's inline comment is stripped; the remaining text passes
+// through verbatim, so no TOML type parsing is needed.
 func tomlOwnedKeys(fragment []byte) ([]struct{ key, val string }, error) {
 	var owned []struct{ key, val string }
 	for _, raw := range strings.Split(string(fragment), "\n") {
@@ -38,7 +69,10 @@ func tomlOwnedKeys(fragment []byte) ([]struct{ key, val string }, error) {
 		if m == nil {
 			return nil, fmt.Errorf("settings fragment has a line that is not a top-level key assignment: %q", trimmed)
 		}
-		val := strings.TrimSpace(line[strings.Index(line, "=")+1:])
+		val := stripTomlInlineComment(line[strings.Index(line, "=")+1:])
+		if strings.Contains(val, `"""`) || strings.Contains(val, "'''") {
+			return nil, fmt.Errorf("settings fragment value for %q looks multi-line; only single-line values are supported", m[1])
+		}
 		owned = append(owned, struct{ key, val string }{m[1], val})
 	}
 	return owned, nil
@@ -52,6 +86,13 @@ func tomlOwnedKeys(fragment []byte) ([]struct{ key, val string }, error) {
 // region before the first table header, where top-level keys legally live) is
 // rewritten; new owned keys are appended to the end of that preamble.
 //
+// Line-based surgery cannot see into a top-level multi-line string ("""..."""),
+// whose continuation lines can start with '[' and masquerade as table headers,
+// so if the preamble contains a triple-quote the merge REFUSES rather than risk
+// corrupting the file. Codex's config.toml has no such strings; this is a safe
+// backstop, not an expected path. Multi-line strings inside a [table] are fine —
+// they live in the preserved-verbatim region and are never parsed.
+//
 // Args:
 //
 //	live     ([]byte): Current config.toml content; empty/nil if absent.
@@ -61,7 +102,8 @@ func tomlOwnedKeys(fragment []byte) ([]struct{ key, val string }, error) {
 //
 //	merged  ([]byte): The content to write.
 //	changed (bool):   False if live already equals merged.
-//	err     (error):  A table in the fragment, or a malformed fragment line.
+//	err     (error):  A table/multi-line in the fragment, a malformed fragment
+//	                  line, or a top-level multi-line string in the live file.
 func MergeTomlSettingsContent(live, fragment []byte) ([]byte, bool, error) {
 	owned, err := tomlOwnedKeys(fragment)
 	if err != nil {
@@ -70,8 +112,7 @@ func MergeTomlSettingsContent(live, fragment []byte) ([]byte, bool, error) {
 
 	// Split live into the preamble (top-level keys) and the tables region, which
 	// starts at the first table header and is preserved verbatim.
-	liveStr := string(live)
-	lines := strings.SplitAfter(liveStr, "\n") // keep line endings
+	lines := strings.SplitAfter(string(live), "\n") // keep line endings
 	var preamble []string
 	tablesFrom := -1
 	for i, l := range lines {
@@ -81,6 +122,16 @@ func MergeTomlSettingsContent(live, fragment []byte) ([]byte, bool, error) {
 		}
 		preamble = append(preamble, l)
 	}
+
+	// Refuse if the preamble holds a multi-line string: a '[' inside it may have
+	// been misread as the table boundary above, so line surgery is unsafe.
+	for _, l := range preamble {
+		if strings.Contains(l, `"""`) || strings.Contains(l, "'''") {
+			return nil, false, fmt.Errorf(
+				"config.toml top-level region contains a multi-line string; refusing to edit it safely")
+		}
+	}
+
 	tables := ""
 	if tablesFrom >= 0 {
 		tables = strings.Join(lines[tablesFrom:], "")
