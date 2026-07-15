@@ -159,8 +159,14 @@ version-controlled **fragment** that claude-sync injects into the live file:
   `permissions`, and anything else Claude Code writes never churn.
 
 The live file is backed up to `settings.json.bak` before any change, and a
-run that would change nothing writes nothing. Only Claude has a managed settings
-file today; other platforms are skipped.
+run that would change nothing writes nothing.
+
+**Codex** is also supported: `settings/codex.toml` is merged into
+`~/.codex/config.toml` as a **TOML** fragment with the same ownership semantics.
+The owned top-level keys (e.g. `sandbox_mode`, `approval_policy`) are set, while
+every `[table]` section (per-project trust, hook-trust hashes, TUI counters) is
+preserved byte-for-byte — only the file's pre-table preamble is rewritten.
+Opencode and Antigravity are skipped.
 
 **Adding a plugin.** Install it the native way (Claude Code's `/plugin`), which
 writes `enabledPlugins` in the live file. Because the fragment *owns* that key,

@@ -14,8 +14,11 @@ func TestSettingsTargetName(t *testing.T) {
 	if got := SettingsTargetName(config.PlatformClaude); got != "settings.json" {
 		t.Errorf("SettingsTargetName(Claude) = %q; want settings.json", got)
 	}
+	if got := SettingsTargetName(config.PlatformCodex); got != "config.toml" {
+		t.Errorf("SettingsTargetName(Codex) = %q; want config.toml", got)
+	}
 	// Platforms without a supported settings file yield "".
-	for _, p := range []config.Platform{config.PlatformCodex, config.PlatformAntigravity, config.PlatformOpencode} {
+	for _, p := range []config.Platform{config.PlatformAntigravity, config.PlatformOpencode} {
 		if got := SettingsTargetName(p); got != "" {
 			t.Errorf("SettingsTargetName(%v) = %q; want \"\"", p, got)
 		}
@@ -344,8 +347,11 @@ func TestSettingsSourceFile(t *testing.T) {
 	if got := SettingsSourceFile(config.PlatformClaude); got != "claude.json" {
 		t.Errorf("SettingsSourceFile(Claude) = %q; want claude.json", got)
 	}
-	if got := SettingsSourceFile(config.PlatformCodex); got != "" {
-		t.Errorf("SettingsSourceFile(Codex) = %q; want \"\"", got)
+	if got := SettingsSourceFile(config.PlatformCodex); got != "codex.toml" {
+		t.Errorf("SettingsSourceFile(Codex) = %q; want codex.toml", got)
+	}
+	if got := SettingsSourceFile(config.PlatformOpencode); got != "" {
+		t.Errorf("SettingsSourceFile(Opencode) = %q; want \"\"", got)
 	}
 }
 

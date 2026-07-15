@@ -16,18 +16,37 @@ import (
 // SettingsTargetName returns the settings file name for a platform, or "" if
 // the platform has no settings file this tool manages.
 //
-// Only Claude is supported today. The other agents' settings are not
-// interchangeable with it — Codex uses TOML (`config.toml`), Opencode declares
-// plugins as an array in `opencode.json`, and Antigravity splits config across
-// several files — so there is nothing shared to sync and each would need its
-// own format-aware writer.
+// Claude (JSON `settings.json`) and Codex (TOML `config.toml`) are supported;
+// the merge dispatches on format. Fragments carry only PORTABLE keys — Claude's
+// plugin declaration, Codex's model/sandbox/approval scalars — never the
+// machine-specific sections (Codex's per-project trust, hook-trust hashes).
+// Opencode (`opencode.json` plugin array) and Antigravity (config split across
+// files) are not supported; there is nothing shared to sync for them today.
 func SettingsTargetName(platform config.Platform) string {
 	switch platform {
 	case config.PlatformClaude:
 		return "settings.json"
+	case config.PlatformCodex:
+		return "config.toml"
 	default:
 		return ""
 	}
+}
+
+// settingsIsToml reports whether a platform's settings file is TOML (Codex)
+// rather than JSON (Claude). The merge/compare logic dispatches on this.
+func settingsIsToml(platform config.Platform) bool {
+	return platform == config.PlatformCodex
+}
+
+// MergeSettingsForPlatform injects a fragment using the format the platform's
+// settings file requires (TOML for Codex, JSON otherwise), so callers do not
+// have to know the format.
+func MergeSettingsForPlatform(platform config.Platform, live, fragment []byte) ([]byte, bool, error) {
+	if settingsIsToml(platform) {
+		return MergeTomlSettingsContent(live, fragment)
+	}
+	return MergeSettingsContent(live, fragment)
 }
 
 // SettingsSourceFile returns the fragment file name under the settings source
@@ -37,6 +56,8 @@ func SettingsSourceFile(platform config.Platform) string {
 	switch platform {
 	case config.PlatformClaude:
 		return "claude.json"
+	case config.PlatformCodex:
+		return "codex.toml"
 	default:
 		return ""
 	}
@@ -288,6 +309,13 @@ func CaptureSettings(srcDir, destDir string, platform config.Platform) (Result, 
 	if target == "" || srcName == "" {
 		return res, nil
 	}
+	// Capture is the plugin round-trip: it only makes sense where the agent's own
+	// UI rewrites owned keys (Claude's /plugin). Codex config values are edited in
+	// the fragment directly, so there is nothing to pull back, and the JSON codec
+	// below cannot read TOML anyway.
+	if settingsIsToml(platform) {
+		return res, nil
+	}
 
 	fragPath := filepath.Join(srcDir, srcName)
 	fragment, err := os.ReadFile(fragPath)
@@ -518,7 +546,7 @@ func ApplySettings(srcDir, destDir string, platform config.Platform) (Result, er
 			return res, fmt.Errorf("read %s: %w", destPath, err)
 		}
 
-		merged, changed, err := MergeSettingsContent(live, fragment)
+		merged, changed, err := MergeSettingsForPlatform(platform, live, fragment)
 		if err != nil {
 			return res, fmt.Errorf("%s: %w", destPath, err)
 		}

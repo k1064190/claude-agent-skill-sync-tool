@@ -235,7 +235,7 @@ func settingsState(srcDir, destPath string, platform config.Platform) string {
 	if err != nil && !os.IsNotExist(err) {
 		return "error"
 	}
-	_, changed, err := intsync.MergeSettingsContent(live, fragment)
+	_, changed, err := intsync.MergeSettingsForPlatform(platform, live, fragment)
 	if err != nil {
 		return "error"
 	}

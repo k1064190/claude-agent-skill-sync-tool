@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2026-07-15
+
+### Added
+
+- Codex settings support in the `settings/` item type: `settings/codex.toml` is
+  merged into `~/.codex/config.toml` as a TOML fragment. Same ownership semantics
+  as the JSON path — owned top-level keys (model/sandbox/approval scalars) are
+  set, every [table] section (per-project trust, hook-trust hashes, TUI counters)
+  is preserved byte-for-byte, and only the pre-table preamble is rewritten.
+- `MergeTomlSettingsContent` / `MergeSettingsForPlatform` (format-aware dispatch).
+
+
 ## [0.8.0] - 2026-07-14
 
 ### Added
