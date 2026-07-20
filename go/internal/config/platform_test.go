@@ -24,6 +24,8 @@ func TestPlatformDestDir(t *testing.T) {
 		{PlatformAntigravity, ScopeProject, "skills", filepath.Join(".agents", "skills")},
 		{PlatformAntigravity, ScopeProject, "rules", filepath.Join(".agents", "rules")},
 		{PlatformCodex, ScopeProject, "agents", filepath.Join(".codex", "agents")},
+		{PlatformCodex, ScopeUser, "codex-agents", filepath.Join(".codex", "agents")},
+		{PlatformCodex, ScopeProject, "codex-agents", filepath.Join(".codex", "agents")},
 		// codex-rules is user-global regardless of scope: Codex enforces from
 		// ~/.codex/rules/ only, so project scope must NOT point at ./.codex/rules.
 		{PlatformCodex, ScopeUser, "codex-rules", filepath.Join(".codex", "rules")},
@@ -50,6 +52,14 @@ func TestPlatformDestDir(t *testing.T) {
 		if !strings.HasSuffix(result, expected) {
 			t.Errorf("PlatformDestDir(%v, %v, %v) = %v; expected to end with %v",
 				tt.platform, tt.scope, tt.itemType, result, expected)
+		}
+	}
+}
+
+func TestPlatformDestDirCodexAgentsRejectsOtherPlatforms(t *testing.T) {
+	for _, platform := range []Platform{PlatformClaude, PlatformAntigravity, PlatformOpencode} {
+		if got := PlatformDestDir(platform, ScopeUser, "codex-agents"); got != "" {
+			t.Errorf("PlatformDestDir(%v, ScopeUser, codex-agents) = %q; want empty", platform, got)
 		}
 	}
 }

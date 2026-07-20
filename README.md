@@ -62,6 +62,7 @@ The tool asks for a **source root** containing your assets.
 ├── skills/           # Skill directories (shared across platforms via .agents/skills)
 ├── agents/           # Agent .md files (platform-specific routing)
 ├── rules/            # Rule .md files
+├── codex-agents/     # Native Codex custom-agent .toml files → ~/.codex/agents/
 ├── templates/        # Configuration templates (common.md + platform.md)
 ├── settings/         # Settings fragments merged into each platform's settings file
 └── codex-rules/      # Codex execpolicy .rules → ~/.codex/rules/ (deterministic command blocks)
@@ -89,7 +90,7 @@ Choose one or more platforms to sync to:
 ### 3. Scope & Item Selection
 
 1.  **Scope**: Choose **User scope** (global) or **Project scope** (current directory).
-2.  **Item Type**: Choose what to sync (`skills`, `agents`, `rules`, `templates`, or `settings`).
+2.  **Item Type**: Choose what to sync (`skills`, `agents`, `rules`, `codex-agents`, `templates`, or `settings`).
 
 ### 4. Template Builder (Special Case)
 
@@ -104,7 +105,7 @@ In Project Scope, if only one instruction file is generated, `claude-sync` autom
 
 ### 5. Tree Selection & Sync
 
-For `skills`, `agents`, and `rules`, use the interactive TUI to pick items. The tool will then:
+For `skills`, `agents`, `rules`, and `codex-agents`, use the interactive TUI to pick items. The tool will then:
 - Create symlinks in the target directories.
 - Use absolute paths in output for clear visibility.
 
@@ -211,10 +212,12 @@ Paths below are for **User scope**. In **Project scope**, Antigravity routes all
 items under the workspace root `./.agents/` (e.g. `./.agents/skills`), matching
 `agy`'s workspace discovery.
 
-> **Known limitation:** Antigravity and Codex do not load Markdown persona
+> **Known limitation:** Antigravity and Codex do not load shared Markdown persona
 > `agents` — those are only consumed by Claude and Opencode. Selecting
 > `agents` for Antigravity/Codex creates links the tool reports as synced but
-> those platforms ignore them.
+> those platforms ignore them. Native Codex custom agents use standalone TOML
+> definitions instead; put them under `codex-agents/` to sync them exclusively
+> to `~/.codex/agents/` (user scope) or `./.codex/agents/` (project scope).
 >
 > **Known limitation:** Antigravity user-scope `rules` are synced to
 > `~/.gemini/config/rules`, but `agy` documents global rules as a single

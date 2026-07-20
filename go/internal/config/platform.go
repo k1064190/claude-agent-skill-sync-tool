@@ -39,6 +39,16 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 		base = home
 	}
 
+	// Native Codex custom agents are standalone TOML files. Keep them in a
+	// separate source item type so Markdown persona agents are not routed to
+	// platforms that cannot load the Codex format.
+	if itemType == "codex-agents" {
+		if platform != PlatformCodex {
+			return ""
+		}
+		itemType = "agents"
+	}
+
 	isTemplate := false
 	if itemType == "templates" {
 		itemType = ""
