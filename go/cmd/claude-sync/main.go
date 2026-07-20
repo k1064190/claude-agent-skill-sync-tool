@@ -107,7 +107,7 @@ func findLeafSkills(baseDir, dir string, skills *[]string, visited map[string]bo
 	return hasSubSkill, nil
 }
 
-// --- .md file discovery (agents, commands, rules) ---
+// --- File discovery (agents, commands, rules) ---
 
 // collectMdFiles walks srcDir recursively and returns sorted relative paths
 // for every *.md file found. Unlike filepath.Walk it follows symlinked
@@ -115,6 +115,11 @@ func findLeafSkills(baseDir, dir string, skills *[]string, visited map[string]bo
 // link into an external repo.
 func collectMdFiles(srcDir string) ([]string, error) {
 	return collectFilesBySuffix(srcDir, ".md")
+}
+
+// collectCodexAgentFiles returns native Codex custom-agent TOML definitions.
+func collectCodexAgentFiles(srcDir string) ([]string, error) {
+	return collectFilesBySuffix(srcDir, ".toml")
 }
 
 // collectRuleFiles is the codex-rules equivalent: it returns every *.rules file
@@ -634,9 +639,12 @@ func runRefresh(cfg *config.Config, scope config.Scope) bool {
 
 		var allItems []string
 		var err error
-		if itemType == "skills" {
+		switch itemType {
+		case "skills":
 			allItems, err = collectSkills(srcDir)
-		} else {
+		case "codex-agents":
+			allItems, err = collectCodexAgentFiles(srcDir)
+		default:
 			allItems, err = collectMdFiles(srcDir)
 		}
 		if err != nil {
@@ -780,6 +788,10 @@ func main() {
 	fmt.Printf("  Targets:\n")
 	for _, p := range platforms {
 		dest := config.PlatformDestDir(p, scope, itemType)
+		if dest == "" {
+			fmt.Printf("    - [%s] skipped (unsupported item type)\n", p)
+			continue
+		}
 		displayPath := dest
 		if abs, err := filepath.Abs(dest); err == nil {
 			displayPath = abs
@@ -918,9 +930,12 @@ func main() {
 
 	// --- Discover items ---
 	var allItems []string
-	if itemType == "skills" {
+	switch itemType {
+	case "skills":
 		allItems, err = collectSkills(srcDir)
-	} else {
+	case "codex-agents":
+		allItems, err = collectCodexAgentFiles(srcDir)
+	default:
 		allItems, err = collectMdFiles(srcDir)
 	}
 	if err != nil {
@@ -937,6 +952,9 @@ func main() {
 	existingUnion := make(map[string]bool)
 	for _, p := range platforms {
 		destDir := config.PlatformDestDir(p, scope, itemType)
+		if destDir == "" {
+			continue
+		}
 		existing := config.ExistingSymlinks(allItems, srcDir, destDir)
 		for k, v := range existing {
 			if v {
@@ -1015,8 +1033,13 @@ func main() {
 	// Sync to all selected platforms
 	totalLinked := 0
 	totalRemoved := 0
+	totalPlatforms := 0
 	for _, p := range platforms {
 		destDir := config.PlatformDestDir(p, scope, itemType)
+		if destDir == "" {
+			continue
+		}
+		totalPlatforms++
 		if err := os.MkdirAll(destDir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "Cannot create dest dir %s: %v\n", destDir, err)
 			continue
@@ -1034,5 +1057,5 @@ func main() {
 	}
 
 	fmt.Printf("\nDone. Linked %d, removed %d total %s across %d platform(s)\n",
-		totalLinked, totalRemoved, itemType, len(platforms))
+		totalLinked, totalRemoved, itemType, totalPlatforms)
 }

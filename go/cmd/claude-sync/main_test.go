@@ -175,6 +175,31 @@ func TestCollectMdFilesSymlinkCycle(t *testing.T) {
 	}
 }
 
+// TestCollectCodexAgentFiles verifies that native Codex custom-agent
+// discovery includes TOML definitions and excludes Markdown persona agents.
+func TestCollectCodexAgentFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	srcDir := filepath.Join(tempDir, "codex-agents")
+	if err := os.MkdirAll(filepath.Join(srcDir, "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "review", "adversarial.toml"), []byte("name = \"reviewer\""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "persona.md"), []byte("ignored"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := collectCodexAgentFiles(srcDir)
+	if err != nil {
+		t.Fatalf("collectCodexAgentFiles: %v", err)
+	}
+	want := []string{filepath.Join("review", "adversarial.toml")}
+	if len(items) != len(want) || items[0] != want[0] {
+		t.Errorf("collectCodexAgentFiles = %v; want %v", items, want)
+	}
+}
+
 // TestLinkedRepos verifies that symlinks in the source tree are resolved to
 // the git repository roots containing their targets, deduplicated.
 func TestLinkedRepos(t *testing.T) {
