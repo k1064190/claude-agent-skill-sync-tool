@@ -26,6 +26,8 @@ func TestPlatformDestDir(t *testing.T) {
 		{PlatformCodex, ScopeProject, "agents", filepath.Join(".codex", "agents")},
 		{PlatformCodex, ScopeUser, "codex-agents", filepath.Join(".codex", "agents")},
 		{PlatformCodex, ScopeProject, "codex-agents", filepath.Join(".codex", "agents")},
+		{PlatformCodex, ScopeUser, "codex-notifiers", filepath.Join(".local", "bin")},
+		{PlatformCodex, ScopeProject, "codex-notifiers", filepath.Join(".local", "bin")},
 		// codex-rules is user-global regardless of scope: Codex enforces from
 		// ~/.codex/rules/ only, so project scope must NOT point at ./.codex/rules.
 		{PlatformCodex, ScopeUser, "codex-rules", filepath.Join(".codex", "rules")},
@@ -53,6 +55,21 @@ func TestPlatformDestDir(t *testing.T) {
 			t.Errorf("PlatformDestDir(%v, %v, %v) = %v; expected to end with %v",
 				tt.platform, tt.scope, tt.itemType, result, expected)
 		}
+	}
+}
+
+func TestPlatformDestDirCodexNotifiersRejectsOtherPlatforms(t *testing.T) {
+	for _, platform := range []Platform{PlatformClaude, PlatformAntigravity, PlatformOpencode} {
+		if got := PlatformDestDir(platform, ScopeUser, "codex-notifiers"); got != "" {
+			t.Errorf("PlatformDestDir(%v, ScopeUser, codex-notifiers) = %q; want empty", platform, got)
+		}
+	}
+}
+
+func TestPlatformDestDirCodexNotifiersRequiresHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	if got := PlatformDestDir(PlatformCodex, ScopeUser, "codex-notifiers"); got != "" {
+		t.Errorf("PlatformDestDir(Codex, ScopeUser, codex-notifiers) = %q; want empty without a home directory", got)
 	}
 }
 

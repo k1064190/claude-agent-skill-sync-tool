@@ -122,6 +122,26 @@ func collectCodexAgentFiles(srcDir string) ([]string, error) {
 	return collectFilesBySuffix(srcDir, ".toml")
 }
 
+// collectCodexNotifierFiles returns executable regular files that Codex can
+// invoke through its top-level `notify` setting.
+func collectCodexNotifierFiles(srcDir string) ([]string, error) {
+	candidates, err := collectFilesBySuffix(srcDir, "")
+	if err != nil {
+		return nil, err
+	}
+	items := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		info, err := os.Stat(filepath.Join(srcDir, candidate))
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			items = append(items, candidate)
+		}
+	}
+	return items, nil
+}
+
 // collectRuleFiles is the codex-rules equivalent: it returns every *.rules file
 // (Codex execpolicy policy files) under srcDir, symlink-following.
 func collectRuleFiles(srcDir string) ([]string, error) {
@@ -535,6 +555,33 @@ func clobberSafeRules(rules []string, destDir string) map[string]bool {
 	return safe
 }
 
+// clobberSafeNotifierSelection filters an interactive notifier selection so
+// ~/.local/bin entries owned by the user or another tool are never replaced.
+// An absent destination or this tool's exact existing symlink is safe.
+func clobberSafeNotifierSelection(selected map[string]bool, srcDir, destDir string) map[string]bool {
+	safe := make(map[string]bool, len(selected))
+	for item, isSelected := range selected {
+		if !isSelected {
+			continue
+		}
+		dest := filepath.Join(destDir, item)
+		info, err := os.Lstat(dest)
+		if os.IsNotExist(err) {
+			safe[item] = true
+			continue
+		}
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			target, readErr := os.Readlink(dest)
+			if readErr == nil && target == filepath.Join(srcDir, item) {
+				safe[item] = true
+				continue
+			}
+		}
+		fmt.Fprintf(os.Stderr, "  skipped %s (an entry not owned by claude-sync already exists there)\n", dest)
+	}
+	return safe
+}
+
 // removeDanglingLinks deletes symlinks under destDir that point into srcDir but
 // whose target no longer resolves (the source item was deleted or renamed).
 // These are the broken links --status reports; refresh cleans them so the two
@@ -644,6 +691,8 @@ func runRefresh(cfg *config.Config, scope config.Scope) bool {
 			allItems, err = collectSkills(srcDir)
 		case "codex-agents":
 			allItems, err = collectCodexAgentFiles(srcDir)
+		case "codex-notifiers":
+			allItems, err = collectCodexNotifierFiles(srcDir)
 		default:
 			allItems, err = collectMdFiles(srcDir)
 		}
@@ -935,6 +984,8 @@ func main() {
 		allItems, err = collectSkills(srcDir)
 	case "codex-agents":
 		allItems, err = collectCodexAgentFiles(srcDir)
+	case "codex-notifiers":
+		allItems, err = collectCodexNotifierFiles(srcDir)
 	default:
 		allItems, err = collectMdFiles(srcDir)
 	}
@@ -1046,7 +1097,11 @@ func main() {
 		}
 
 		fmt.Printf("\nSyncing to %s...\n", p)
-		syncResult, err := intsync.SyncItems(allItems, selectedSet, srcDir, destDir)
+		syncSelection := selectedSet
+		if itemType == "codex-notifiers" {
+			syncSelection = clobberSafeNotifierSelection(selectedSet, srcDir, destDir)
+		}
+		syncResult, err := intsync.SyncItems(allItems, syncSelection, srcDir, destDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Sync error for %s: %v\n", p, err)
 			// Continue to next platform

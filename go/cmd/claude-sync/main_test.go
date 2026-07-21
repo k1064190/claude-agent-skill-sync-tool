@@ -200,6 +200,53 @@ func TestCollectCodexAgentFiles(t *testing.T) {
 	}
 }
 
+func TestCollectCodexNotifierFilesIncludesOnlyExecutables(t *testing.T) {
+	tempDir := t.TempDir()
+	srcDir := filepath.Join(tempDir, "codex-notifiers")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "codex-notify"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "README.md"), []byte("docs"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := collectCodexNotifierFiles(srcDir)
+	if err != nil {
+		t.Fatalf("collectCodexNotifierFiles: %v", err)
+	}
+	want := []string{"codex-notify"}
+	if len(items) != len(want) || items[0] != want[0] {
+		t.Errorf("collectCodexNotifierFiles = %v; want %v", items, want)
+	}
+}
+
+func TestClobberSafeNotifierSelectionProtectsRealCommands(t *testing.T) {
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(destDir, "codex-notify"), []byte("existing"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/opt/other-notify", filepath.Join(destDir, "foreign-notify")); err != nil {
+		t.Fatal(err)
+	}
+
+	selected := map[string]bool{"codex-notify": true, "foreign-notify": true, "other-notify": true}
+	safe := clobberSafeNotifierSelection(selected, srcDir, destDir)
+
+	if safe["codex-notify"] {
+		t.Error("codex-notify marked safe; an existing real command must never be overwritten")
+	}
+	if !safe["other-notify"] {
+		t.Error("other-notify is absent and should be safe to link")
+	}
+	if safe["foreign-notify"] {
+		t.Error("foreign-notify marked safe; a symlink owned by another tool must not be overwritten")
+	}
+}
+
 // TestLinkedRepos verifies that symlinks in the source tree are resolved to
 // the git repository roots containing their targets, deduplicated.
 func TestLinkedRepos(t *testing.T) {
