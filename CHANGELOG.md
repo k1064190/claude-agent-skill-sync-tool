@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- `codex-notifiers` item type: selectively links executable Codex notifier
+  programs into `~/.local/bin/`, reports their status, repairs existing links
+  during `--refresh`, and refuses to overwrite commands owned by another tool.
+
 ## [0.10.0] - 2026-07-15
 
 ### Added

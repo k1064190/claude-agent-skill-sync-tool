@@ -1,6 +1,6 @@
 # claude-sync
 
-Interactive CLI for selectively syncing AI agent skills, agents, rules, instruction templates, and settings across multiple platforms (Claude Code, Antigravity, Codex, Opencode).
+Interactive CLI for selectively syncing AI agent skills, agents, rules, instruction templates, settings, and Codex notifier programs across multiple platforms (Claude Code, Antigravity, Codex, Opencode).
 
 ## Why?
 
@@ -63,6 +63,7 @@ The tool asks for a **source root** containing your assets.
 ├── agents/           # Agent .md files (platform-specific routing)
 ├── rules/            # Rule .md files
 ├── codex-agents/     # Native Codex custom-agent .toml files → ~/.codex/agents/
+├── codex-notifiers/  # Executable Codex notifier programs → ~/.local/bin/
 ├── templates/        # Configuration templates (common.md + platform.md)
 ├── settings/         # Settings fragments merged into each platform's settings file
 └── codex-rules/      # Codex execpolicy .rules → ~/.codex/rules/ (deterministic command blocks)
@@ -90,7 +91,7 @@ Choose one or more platforms to sync to:
 ### 3. Scope & Item Selection
 
 1.  **Scope**: Choose **User scope** (global) or **Project scope** (current directory).
-2.  **Item Type**: Choose what to sync (`skills`, `agents`, `rules`, `codex-agents`, `templates`, or `settings`).
+2.  **Item Type**: Choose what to sync (`skills`, `agents`, `rules`, `codex-agents`, `codex-notifiers`, `templates`, or `settings`).
 
 ### 4. Template Builder (Special Case)
 
@@ -105,7 +106,7 @@ In Project Scope, if only one instruction file is generated, `claude-sync` autom
 
 ### 5. Tree Selection & Sync
 
-For `skills`, `agents`, `rules`, and `codex-agents`, use the interactive TUI to pick items. The tool will then:
+For `skills`, `agents`, `rules`, `codex-agents`, and `codex-notifiers`, use the interactive TUI to pick items. The tool will then:
 - Create symlinks in the target directories.
 - Use absolute paths in output for clear visibility.
 
@@ -169,6 +170,22 @@ The owned top-level keys (e.g. `sandbox_mode`, `approval_policy`) are set, while
 every `[table]` section (per-project trust, hook-trust hashes, TUI counters) is
 preserved byte-for-byte — only the file's pre-table preamble is rewritten.
 Opencode and Antigravity are skipped.
+
+## Codex Notifiers
+
+Executable files under `codex-notifiers/` can be selected for Codex and are
+linked into `~/.local/bin/`. The destination is user-global even when project
+scope is selected. Existing commands not owned by claude-sync are never
+overwritten. Point Codex at an installed command through the top-level settings
+fragment, for example:
+
+```toml
+notify = ["codex-notify"]
+```
+
+Make sure `~/.local/bin` is in the environment that starts Codex. Subsequent
+`claude-sync --refresh` runs repair an existing notifier link and reapply the
+settings fragment without adding a notifier that was never selected.
 
 **Adding a plugin.** Install it the native way (Claude Code's `/plugin`), which
 writes `enabledPlugins` in the live file. Because the fragment *owns* that key,

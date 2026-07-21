@@ -77,6 +77,20 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 		return filepath.Clean(filepath.Join(home, ".codex", "rules"))
 	}
 
+	// External notifier programs are selected for Codex only and installed as
+	// user commands. They remain user-global even when project scope is selected
+	// because config.toml invokes them by command name through PATH.
+	if itemType == "codex-notifiers" {
+		if platform != PlatformCodex {
+			return ""
+		}
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return ""
+		}
+		return filepath.Clean(filepath.Join(home, ".local", "bin"))
+	}
+
 	// For Project Scope templates, the destination is the project root itself
 	// (e.g. ./CLAUDE.md, ./GEMINI.md, ./AGENTS.md)
 	if scope == ScopeProject && isTemplate {
