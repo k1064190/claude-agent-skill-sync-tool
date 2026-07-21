@@ -2,10 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## [0.11.0] - 2026-07-21
 
 ### Added
 
+- `codex-agents` item type: selectively links native Codex custom-agent TOML
+  definitions into `.codex/agents/` at the selected scope while excluding the
+  Markdown persona agents used by other platforms.
 - `codex-notifiers` item type: selectively links executable Codex notifier
   programs into `~/.local/bin/`, reports their status, repairs existing links
   during `--refresh`, and refuses to overwrite commands owned by another tool.
