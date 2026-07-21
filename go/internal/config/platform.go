@@ -79,7 +79,7 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 
 	// External notifier programs are selected for Codex only and installed as
 	// user commands. They remain user-global even when project scope is selected
-	// because config.toml invokes them by command name through PATH.
+	// because config.toml invokes them from the user-global executable path.
 	if itemType == "codex-notifiers" {
 		if platform != PlatformCodex {
 			return ""

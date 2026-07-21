@@ -63,6 +63,42 @@ approval_policy = "on-request"
 	}
 }
 
+func TestMergeTomlAddsRootStopHookWithoutChangingHookTrust(t *testing.T) {
+	live := `notify = ["codex-notify"]
+
+[hooks.state."/home/cwh/.codex/hooks.json:stop:0:0"]
+enabled = true
+trusted_hash = "sha256:abc"
+`
+	fragment := `notify = []
+hooks.Stop = [{ hooks = [{ type = "command", command = "$HOME/.local/bin/codex-notify", timeout = 10 }] }]
+`
+	merged, changed, err := MergeTomlSettingsContent([]byte(live), []byte(fragment))
+	if err != nil {
+		t.Fatalf("MergeTomlSettingsContent: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false; want true")
+	}
+	got := string(merged)
+	for _, must := range []string{
+		`notify = []`,
+		`hooks.Stop = [{ hooks = [{ type = "command", command = "$HOME/.local/bin/codex-notify", timeout = 10 }] }]`,
+		`[hooks.state."/home/cwh/.codex/hooks.json:stop:0:0"]`,
+		`trusted_hash = "sha256:abc"`,
+	} {
+		if !strings.Contains(got, must) {
+			t.Errorf("merged config lost %q", must)
+		}
+	}
+	if strings.Contains(got, `notify = ["codex-notify"]`) {
+		t.Error("legacy notifier registration survived")
+	}
+	if strings.Index(got, "hooks.Stop") > strings.Index(got, "[hooks.state.") {
+		t.Error("root Stop hook was placed inside the preserved hook-trust table")
+	}
+}
+
 func TestMergeTomlReplacesExistingKey(t *testing.T) {
 	live := `model = "gpt-5.6-sol"
 sandbox_mode = "read-only"

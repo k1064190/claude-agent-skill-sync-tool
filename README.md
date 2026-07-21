@@ -180,10 +180,16 @@ overwritten. Point Codex at an installed command through the top-level settings
 fragment, for example:
 
 ```toml
-notify = ["codex-notify"]
+notify = []
+hooks.Stop = [{ hooks = [{ type = "command", command = "$HOME/.local/bin/codex-notify", timeout = 10 }] }]
 ```
 
-Make sure `~/.local/bin` is in the environment that starts Codex. Subsequent
+The root `Stop` hook runs after the main Codex turn, while omitting
+`hooks.SubagentStop` prevents individual subagent completions from notifying.
+Codex asks for one-time trust for a new hook definition; approve it through
+`/hooks` after the first sync on each machine.
+
+The example uses the user-global executable's absolute `$HOME` path. Subsequent
 `claude-sync --refresh` runs repair an existing notifier link and reapply the
 settings fragment without adding a notifier that was never selected.
 
