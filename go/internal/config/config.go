@@ -24,13 +24,12 @@ const (
 
 // Config holds persistent settings saved to disk.
 type Config struct {
-	// SourceRoot is the absolute path to the directory containing
-	// skills/ and agents/ subdirectories.
+	// SourceRoot is the absolute path containing supported item directories.
 	SourceRoot string `json:"source_root"`
 }
 
 // ItemTypes lists the supported sync targets in display order.
-var ItemTypes = []string{"skills", "agents", "rules", "codex-agents", "codex-notifiers", "templates", "settings", "codex-rules"}
+var ItemTypes = []string{"skills", "agents", "rules", "codex-agents", "notifiers", "templates", "settings", "codex-rules"}
 
 // SourceDir returns the absolute path to the source directory for the given
 // item type (e.g. "skills" → "<root>/skills").
@@ -50,6 +49,20 @@ func configDir() string {
 // configPath returns the full path to the config file.
 func configPath() string {
 	return filepath.Join(configDir(), "config.json")
+}
+
+// PolicyManifestPath returns the persistent module-selection manifest for the
+// requested scope. User policy lives beside claude-sync's existing config;
+// project policy lives in the current repository.
+func PolicyManifestPath(scope Scope) (string, error) {
+	if scope == ScopeProject {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(cwd, ".claude-sync", "policy.toml"), nil
+	}
+	return filepath.Join(configDir(), "policy.toml"), nil
 }
 
 // Load reads the config file from disk. Returns nil if it does not exist.

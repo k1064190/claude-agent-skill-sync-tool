@@ -7,7 +7,8 @@ The fixed `common.md + <platform>.md` template forces testing, staged documentat
 ## What
 
 - Discover policy modules from `templates/modules/<id>/module.md`; YAML frontmatter supplies `id`, `description`, `default`, and `order`, while the Markdown body is the shared prompt.
-- Apply optional `claude.md` and `codex.md` overlays only in user scope.
+- Apply optional platform overlays (`claude.md`, `codex.md`, `gemini.md`, or
+  `opencode.md`) only in user scope.
 - Persist one shared module list in `~/.config/claude-sync/policy.toml` for user scope or `.claude-sync/policy.toml` for project scope.
 - Build project policy into canonical `AGENTS.md`; write project `CLAUDE.md` as the regular file `@AGENTS.md`.
 - Keep legacy template sources supported, but do not overwrite modular-template destinations until a manifest exists.

@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- Module-based instruction policy assembly with persistent user- and
+  project-scope manifests, per-module descriptions/defaults/order, and automatic
+  platform overlays.
+- Additive Claude hook fragments (`settings/claude-hooks.json`) and explicit
+  Codex setting removal (`settings/codex.unset`).
+- Shared `notifiers` item type for Claude and Codex, including safe migration of
+  the exact legacy tool-owned `codex-notify` link.
+
+### Changed
+
+- Project policy builds now use common module bodies only, with `AGENTS.md` as
+  the canonical file and a regular `CLAUDE.md` containing `@AGENTS.md`.
+
 ## [0.11.0] - 2026-07-21
 
 ### Added

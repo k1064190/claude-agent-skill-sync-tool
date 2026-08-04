@@ -18,6 +18,23 @@ var tomlAssignRe = regexp.MustCompile(`^[ \t]*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z
 // tomlTableRe matches a table or array-of-tables header line ([x] or [[x]]).
 var tomlTableRe = regexp.MustCompile(`^[ \t]*\[`)
 
+var simpleTomlTableRe = regexp.MustCompile(`^[ \t]*\[([A-Za-z0-9_.-]+)\][ \t]*(?:#.*)?(?:\r?\n)?$`)
+
+var simpleTomlKeyRe = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
+
+func tomlValueMayContinue(line string) bool {
+	equals := strings.Index(line, "=")
+	if equals < 0 {
+		return false
+	}
+	value := stripTomlInlineComment(line[equals+1:])
+	if value == "" || strings.Contains(value, `"""`) || strings.Contains(value, "'''") {
+		return true
+	}
+	return (strings.HasPrefix(value, "[") && !strings.HasSuffix(value, "]")) ||
+		(strings.HasPrefix(value, "{") && !strings.HasSuffix(value, "}"))
+}
+
 // stripTomlInlineComment returns s truncated at the first '#' that is not inside
 // a quoted string, right-trimmed. TOML comments run to end-of-line unless the
 // '#' sits inside a basic ("...") or literal ('...') string.
@@ -183,4 +200,71 @@ func MergeTomlSettingsContent(live, fragment []byte) ([]byte, bool, error) {
 
 	merged := out.Bytes()
 	return merged, !bytes.Equal(merged, live), nil
+}
+
+// RemoveTomlSettingsKeys removes declared single-line settings while
+// preserving every other byte. Dotted names address keys inside simple tables,
+// so "features.fast_mode" removes "fast_mode" from [features].
+//
+// Args:
+//
+//	live ([]byte): Current config.toml content.
+//	keys ([]string): Bare or dotted setting names to remove.
+//
+// Returns:
+//
+//	merged ([]byte): Content with matching assignments removed.
+//	changed (bool): Whether at least one assignment was removed.
+//	err (error): Invalid or duplicate unset declaration.
+func RemoveTomlSettingsKeys(live []byte, keys []string) ([]byte, bool, error) {
+	remove := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if !simpleTomlKeyRe.MatchString(key) {
+			return nil, false, fmt.Errorf("invalid TOML setting name to unset: %q", key)
+		}
+		if remove[key] {
+			return nil, false, fmt.Errorf("duplicate TOML setting name to unset: %q", key)
+		}
+		remove[key] = true
+	}
+
+	var out strings.Builder
+	section := ""
+	inTable := false
+	changed := false
+	for _, line := range strings.SplitAfter(string(live), "\n") {
+		if tomlTableRe.MatchString(line) {
+			match := simpleTomlTableRe.FindStringSubmatch(line)
+			inTable = true
+			section = ""
+			if match != nil {
+				section = match[1]
+			}
+			out.WriteString(line)
+			continue
+		}
+
+		match := tomlAssignRe.FindStringSubmatch(line)
+		if match != nil && simpleTomlKeyRe.MatchString(match[1]) {
+			name := match[1]
+			if inTable && section == "" {
+				out.WriteString(line)
+				continue
+			}
+			if inTable {
+				name = section + "." + name
+			}
+			if remove[name] {
+				if tomlValueMayContinue(line) {
+					return nil, false, fmt.Errorf("cannot safely unset multiline TOML setting %q", name)
+				}
+				changed = true
+				continue
+			}
+		}
+		out.WriteString(line)
+	}
+
+	return []byte(out.String()), changed, nil
 }

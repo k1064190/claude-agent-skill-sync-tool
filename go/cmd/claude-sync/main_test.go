@@ -4,7 +4,166 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/config"
 )
+
+func TestWriteProjectPolicyOutputsUsesCanonicalAgentsFile(t *testing.T) {
+	root := t.TempDir()
+	count, err := writeProjectPolicyOutputs(root, []config.Platform{config.PlatformClaude, config.PlatformCodex}, "# Shared\n", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("changed files = %d; want 2", count)
+	}
+	agents, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(agents) != "# Shared\n" {
+		t.Fatalf("AGENTS.md = %q", agents)
+	}
+	claudePath := filepath.Join(root, "CLAUDE.md")
+	info, err := os.Lstat(claudePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("CLAUDE.md mode = %s; want regular file", info.Mode())
+	}
+	claude, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(claude) != "@AGENTS.md\n" {
+		t.Fatalf("CLAUDE.md = %q", claude)
+	}
+}
+
+func TestWriteProjectPolicyOutputsMigratesLegacyAgentsAlias(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("legacy policy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("CLAUDE.md", filepath.Join(root, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := writeProjectPolicyOutputs(root, []config.Platform{config.PlatformClaude}, "new policy\n", true)
+	if err != nil {
+		t.Fatalf("writeProjectPolicyOutputs: %v", err)
+	}
+	agentsInfo, err := os.Lstat(filepath.Join(root, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !agentsInfo.Mode().IsRegular() {
+		t.Fatal("AGENTS.md is not a regular canonical file")
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "AGENTS.md")); string(got) != "new policy\n" {
+		t.Errorf("AGENTS.md = %q; want new policy", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "CLAUDE.md")); string(got) != "@AGENTS.md\n" {
+		t.Errorf("CLAUDE.md = %q; want @AGENTS.md reference", got)
+	}
+}
+
+func TestWritePolicyRegularFileCreatesParentDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "AGENTS.md")
+	wrote, err := writePolicyRegularFile(path, []byte("policy\n"), true, false)
+	if err != nil {
+		t.Fatalf("writePolicyRegularFile: %v", err)
+	}
+	if !wrote {
+		t.Fatal("wrote = false; want true")
+	}
+}
+
+func TestRefreshTemplatesReportsInvalidModularManifest(t *testing.T) {
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "templates")
+	moduleDir := filepath.Join(srcDir, "modules", "interaction")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	module := "---\nid: interaction\ndescription: Interaction rules.\ndefault: true\norder: 10\n---\n# Interaction\n"
+	if err := os.WriteFile(filepath.Join(moduleDir, "module.md"), []byte(module), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".claude-sync"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".claude-sync", "policy.toml"), []byte("invalid\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldCWD) })
+
+	if _, err := refreshTemplates(srcDir, config.ScopeProject, []config.Platform{config.PlatformCodex}); err == nil {
+		t.Fatal("refreshTemplates returned nil error for invalid modular manifest")
+	}
+}
+
+func TestRefreshTemplatesWithoutManifestLeavesExistingPolicyUntouched(t *testing.T) {
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "templates")
+	moduleDir := filepath.Join(srcDir, "modules", "interaction")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	module := "---\nid: interaction\ndescription: Interaction rules.\ndefault: true\norder: 10\n---\n# New policy\n"
+	if err := os.WriteFile(filepath.Join(moduleDir, "module.md"), []byte(module), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	policyPath := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(policyPath, []byte("existing policy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldCWD) })
+
+	rebuilt, err := refreshTemplates(srcDir, config.ScopeProject, []config.Platform{config.PlatformCodex})
+	if err != nil {
+		t.Fatalf("refreshTemplates: %v", err)
+	}
+	if rebuilt != 0 {
+		t.Fatalf("rebuilt = %d; want 0", rebuilt)
+	}
+	got, err := os.ReadFile(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "existing policy\n" {
+		t.Fatalf("AGENTS.md = %q; existing policy was overwritten", got)
+	}
+}
+
+func TestWriteProjectPolicyOutputsRefreshDoesNotCreateMissingFiles(t *testing.T) {
+	root := t.TempDir()
+	count, err := writeProjectPolicyOutputs(root, []config.Platform{config.PlatformClaude, config.PlatformCodex}, "# Shared\n", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("changed files = %d; want 0", count)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("AGENTS.md unexpectedly exists: %v", err)
+	}
+}
 
 // TestCollectSkillsFollowsSymlinks verifies that a skill registered in the
 // source tree as a symlink to a directory elsewhere (e.g. a git clone under
@@ -200,9 +359,9 @@ func TestCollectCodexAgentFiles(t *testing.T) {
 	}
 }
 
-func TestCollectCodexNotifierFilesIncludesOnlyExecutables(t *testing.T) {
+func TestCollectNotifierFilesIncludesOnlyExecutables(t *testing.T) {
 	tempDir := t.TempDir()
-	srcDir := filepath.Join(tempDir, "codex-notifiers")
+	srcDir := filepath.Join(tempDir, "notifiers")
 	if err := os.MkdirAll(srcDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -213,13 +372,45 @@ func TestCollectCodexNotifierFilesIncludesOnlyExecutables(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	items, err := collectCodexNotifierFiles(srcDir)
+	items, err := collectNotifierFiles(srcDir)
 	if err != nil {
-		t.Fatalf("collectCodexNotifierFiles: %v", err)
+		t.Fatalf("collectNotifierFiles: %v", err)
 	}
 	want := []string{"codex-notify"}
 	if len(items) != len(want) || items[0] != want[0] {
-		t.Errorf("collectCodexNotifierFiles = %v; want %v", items, want)
+		t.Errorf("collectNotifierFiles = %v; want %v", items, want)
+	}
+}
+
+func TestMigrateLegacyNotifierLinkRemovesOnlyToolOwnedLink(t *testing.T) {
+	sourceRoot := t.TempDir()
+	destDir := t.TempDir()
+	legacyTarget := filepath.Join(sourceRoot, "codex-notifiers", "codex-notify")
+	legacyDest := filepath.Join(destDir, "codex-notify")
+	if err := os.Symlink(legacyTarget, legacyDest); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := migrateLegacyNotifierLink(sourceRoot, destDir)
+	if err != nil {
+		t.Fatalf("migrateLegacyNotifierLink: %v", err)
+	}
+	if !removed {
+		t.Fatal("removed = false; want true for exact tool-owned legacy link")
+	}
+	if _, err := os.Lstat(legacyDest); !os.IsNotExist(err) {
+		t.Fatalf("legacy link still exists: %v", err)
+	}
+
+	if err := os.Symlink("/opt/foreign/codex-notify", legacyDest); err != nil {
+		t.Fatal(err)
+	}
+	removed, err = migrateLegacyNotifierLink(sourceRoot, destDir)
+	if err != nil {
+		t.Fatalf("migrateLegacyNotifierLink foreign: %v", err)
+	}
+	if removed {
+		t.Fatal("removed foreign notifier link")
 	}
 }
 

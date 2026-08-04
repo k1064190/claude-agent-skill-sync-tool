@@ -33,10 +33,10 @@
 - `BuildPolicyContent(modules []PolicyModule, selected []string, platform config.Platform, includeOverlay bool) (string, error)` renders deterministic Markdown.
 - `ReadPolicyManifest(path string) (PolicyManifest, bool, error)` and `WritePolicyManifest(path string, manifest PolicyManifest) error` persist version 1 manifests atomically.
 
-- [ ] Write parsing, ordering, selection, overlay, malformed-input, and manifest round-trip tests.
-- [ ] Run `cd go && go test ./internal/sync` and confirm the new tests fail before implementation.
-- [ ] Implement the minimal module/manifest core and retain legacy builder fallback.
-- [ ] Re-run `cd go && go test ./internal/sync` and confirm it passes.
+- [x] Write parsing, ordering, selection, overlay, malformed-input, and manifest round-trip tests.
+- [x] Run `cd go && go test ./internal/sync` and confirm the new tests fail before implementation.
+- [x] Implement the minimal module/manifest core and retain legacy builder fallback.
+- [x] Re-run `cd go && go test ./internal/sync` and confirm it passes.
 
 ### Task 2: Interactive, status, refresh, and project output
 
@@ -51,10 +51,10 @@
 - `writeProjectPolicyOutputs(...)` writes canonical `AGENTS.md` and platform compatibility files safely.
 - Status reports `unconfigured` when modular sources have no manifest; refresh skips them without writing.
 
-- [ ] Add failing tests for manifest paths, default selection, canonical project output, and unconfigured refresh behavior.
-- [ ] Implement module TUI selection with description preview and manifest persistence after confirmation.
-- [ ] Implement user/platform rendering and project canonical rendering.
-- [ ] Run `cd go && go test ./...`.
+- [x] Add failing tests for manifest paths, default selection, canonical project output, and unconfigured refresh behavior.
+- [x] Implement module TUI selection with description preview and manifest persistence after confirmation.
+- [x] Implement user/platform rendering and project canonical rendering.
+- [x] Run `cd go && go test ./...`.
 
 ### Task 3: Shared notifier and safe settings extensions
 
@@ -74,9 +74,9 @@
 - `ApplySettings` removes exact keys declared by `settings/<platform>.unset`.
 - `ApplySettings` additively merges exact handlers from `settings/claude-hooks.json` without replacing unrelated live hooks.
 
-- [ ] Add failing routing, legacy-notifier migration, TOML unset, and additive Claude hook tests.
-- [ ] Implement minimal safe merge and migration behavior.
-- [ ] Run `cd go && go test ./...`.
+- [x] Add failing routing, legacy-notifier migration, TOML unset, and additive Claude hook tests.
+- [x] Implement minimal safe merge and migration behavior.
+- [x] Run `cd go && go test ./...`.
 
 ### Task 4: Portable module catalog and native agents
 
@@ -89,10 +89,10 @@
 - Create: `/home/cwh/projects/my-skills/codex-agents/*.toml`
 - Delete: `/home/cwh/projects/my-skills/codex-agents/adversarial-code-reviewer.toml`
 
-- [ ] Split the existing common rules into ten approved modules with only three defaults.
-- [ ] Remove mandatory review language and make `code-reviewer-pro` explicitly requested only.
-- [ ] Add the twelve approved role-equivalent Codex agents; document the three MCP-dependent exclusions.
-- [ ] Add contract tests for metadata, defaults, review removal, and agent parity.
+- [x] Split the existing common rules into ten approved modules with only three defaults.
+- [x] Remove mandatory review language and make `code-reviewer-pro` explicitly requested only.
+- [x] Add the twelve approved role-equivalent Codex agents; document the three MCP-dependent exclusions.
+- [x] Add contract tests for metadata, defaults, review removal, and agent parity.
 
 ### Task 5: Portable notifier and settings data
 
@@ -104,14 +104,14 @@
 - Create: `/home/cwh/projects/my-skills/settings/claude-hooks.json`
 - Modify: both repositories' `README.md` and stage summaries.
 
-- [ ] Write failing tests for platform-labelled root Stop messages and the neutral credential directory.
-- [ ] Implement the standard-library notifier and settings fragments.
-- [ ] Run the my-skills test suite in its project environment.
+- [x] Write failing tests for platform-labelled root Stop messages and the neutral credential directory.
+- [x] Implement the standard-library notifier and settings fragments.
+- [x] Run the my-skills test suite in its project environment.
 
 ### Task 6: End-to-end verification and local commits
 
-- [ ] Run `gofmt` on changed Go files and `cd go && go test ./...`.
-- [ ] Run every my-skills test and validate every TOML/JSON/Markdown contract.
-- [ ] Build `claude-sync`, exercise status plus temporary user/project module builds without touching real credentials, and run `claude-sync --refresh` only after source and binary checks pass.
-- [ ] Record concise stage outcomes in both repositories.
-- [ ] Commit each repository locally on `feat/modular-policy-assembly`; do not push or create a PR.
+- [x] Run `gofmt` on changed Go files and `cd go && go test ./...`.
+- [x] Run every my-skills test and validate every TOML/JSON/Markdown contract.
+- [x] Build `claude-sync`, exercise status plus temporary user/project module builds without touching real credentials, and run `claude-sync --refresh` only after source and binary checks pass.
+- [x] Record concise stage outcomes in both repositories.
+- [x] Commit each repository locally on `feat/modular-policy-assembly`; do not push or create a PR.

@@ -161,6 +161,46 @@ approval_policy = "on-request"
 	}
 }
 
+func TestRemoveTomlSettingsKeysRemovesTopLevelAndTableKeys(t *testing.T) {
+	live := []byte(`service_tier = "fast"
+model = "gpt-5.6-sol"
+
+[features]
+fast_mode = true
+plugins = true
+
+[projects."/home/cwh"]
+trust_level = "trusted"
+service_tier = "project-local"
+`)
+
+	got, changed, err := RemoveTomlSettingsKeys(live, []string{"service_tier", "features.fast_mode"})
+	if err != nil {
+		t.Fatalf("RemoveTomlSettingsKeys: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false; want true")
+	}
+	text := string(got)
+	for _, removed := range []string{`service_tier = "fast"`, `fast_mode = true`} {
+		if strings.Contains(text, removed) {
+			t.Errorf("removed setting survived: %q", removed)
+		}
+	}
+	for _, preserved := range []string{`model = "gpt-5.6-sol"`, `plugins = true`, `[projects."/home/cwh"]`, `trust_level = "trusted"`, `service_tier = "project-local"`} {
+		if !strings.Contains(text, preserved) {
+			t.Errorf("unmanaged setting was lost: %q", preserved)
+		}
+	}
+}
+
+func TestRemoveTomlSettingsKeysRefusesMultilineTarget(t *testing.T) {
+	live := []byte("[features]\nfast_mode = [\n  true,\n]\n")
+	if _, _, err := RemoveTomlSettingsKeys(live, []string{"features.fast_mode"}); err == nil {
+		t.Fatal("expected multiline target error")
+	}
+}
+
 // A fragment must declare only top-level keys. A table in the fragment would
 // mean claiming ownership of a machine-specific section (projects, hooks.state),
 // which is never intended and must be rejected loudly.
