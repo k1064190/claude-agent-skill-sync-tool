@@ -150,6 +150,74 @@ func TestMergeSettingsContentEmptyLive(t *testing.T) {
 	}
 }
 
+func TestMergeClaudeHooksPreservesExistingHooksAndAvoidsDuplicates(t *testing.T) {
+	live := []byte(`{
+  "theme": "dark",
+  "hooks": {
+    "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "check.sh"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "existing.sh"}]}]
+  }
+}`)
+	fragment := []byte(`{
+  "Stop": [{"hooks": [{"type": "command", "command": "$HOME/.local/bin/agent-notify claude", "timeout": 10}]}]
+}`)
+
+	merged, changed, err := MergeClaudeHooksContent(live, fragment)
+	if err != nil {
+		t.Fatalf("MergeClaudeHooksContent: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false; want true")
+	}
+	for _, want := range []string{"check.sh", "existing.sh", "agent-notify claude", `"theme": "dark"`} {
+		if !bytes.Contains(merged, []byte(want)) {
+			t.Errorf("merged settings lost %q:\n%s", want, merged)
+		}
+	}
+
+	mergedAgain, changedAgain, err := MergeClaudeHooksContent(merged, fragment)
+	if err != nil {
+		t.Fatalf("MergeClaudeHooksContent second merge: %v", err)
+	}
+	if changedAgain {
+		t.Errorf("second merge changed settings:\n%s", mergedAgain)
+	}
+	if count := bytes.Count(mergedAgain, []byte("agent-notify claude")); count != 1 {
+		t.Errorf("notifier hook appears %d times; want 1", count)
+	}
+}
+
+func TestMergeSettingsFromSourceAppliesAuxiliarySettings(t *testing.T) {
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "codex.toml"), []byte(`sandbox_mode = "danger-full-access"\n`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "codex.unset"), []byte("service_tier\nfeatures.fast_mode\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	live := []byte(`service_tier = "fast"
+
+[features]
+fast_mode = true
+`)
+
+	merged, changed, err := MergeSettingsFromSource(srcDir, config.PlatformCodex, live)
+	if err != nil {
+		t.Fatalf("MergeSettingsFromSource: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false; want true")
+	}
+	for _, removed := range []string{"service_tier", "fast_mode"} {
+		if bytes.Contains(merged, []byte(removed)) {
+			t.Errorf("unset key %q survived:\n%s", removed, merged)
+		}
+	}
+	if !bytes.Contains(merged, []byte(`sandbox_mode = "danger-full-access"`)) {
+		t.Errorf("managed fragment was not merged:\n%s", merged)
+	}
+}
+
 // TestMergeSettingsContentMalformedLive verifies a corrupt live file is a hard
 // error — never silently overwritten.
 func TestMergeSettingsContentMalformedLive(t *testing.T) {

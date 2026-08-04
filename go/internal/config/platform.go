@@ -77,11 +77,11 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 		return filepath.Clean(filepath.Join(home, ".codex", "rules"))
 	}
 
-	// External notifier programs are selected for Codex only and installed as
+	// External notifier programs are shared by Claude and Codex and installed as
 	// user commands. They remain user-global even when project scope is selected
-	// because config.toml invokes them from the user-global executable path.
-	if itemType == "codex-notifiers" {
-		if platform != PlatformCodex {
+	// because both agents invoke them from the user-global executable path.
+	if itemType == "notifiers" {
+		if platform != PlatformClaude && platform != PlatformCodex {
 			return ""
 		}
 		home, err := os.UserHomeDir()

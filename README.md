@@ -1,6 +1,6 @@
 # claude-sync
 
-Interactive CLI for selectively syncing AI agent skills, agents, rules, instruction templates, settings, and Codex notifier programs across multiple platforms (Claude Code, Antigravity, Codex, Opencode).
+Interactive CLI for selectively syncing AI agent skills, agents, rules, modular instruction policies, settings, and completion notifier programs across multiple platforms (Claude Code, Antigravity, Codex, Opencode).
 
 ## Why?
 
@@ -63,8 +63,11 @@ The tool asks for a **source root** containing your assets.
 ├── agents/           # Agent .md files (platform-specific routing)
 ├── rules/            # Rule .md files
 ├── codex-agents/     # Native Codex custom-agent .toml files → ~/.codex/agents/
-├── codex-notifiers/  # Executable Codex notifier programs → ~/.local/bin/
-├── templates/        # Configuration templates (common.md + platform.md)
+├── notifiers/        # Executable Claude/Codex notifier programs → ~/.local/bin/
+├── templates/modules/<id>/
+│   ├── module.md     # Metadata + shared system prompt
+│   ├── claude.md     # Optional automatic Claude overlay
+│   └── codex.md      # Optional automatic Codex overlay
 ├── settings/         # Settings fragments merged into each platform's settings file
 └── codex-rules/      # Codex execpolicy .rules → ~/.codex/rules/ (deterministic command blocks)
 ```
@@ -91,22 +94,30 @@ Choose one or more platforms to sync to:
 ### 3. Scope & Item Selection
 
 1.  **Scope**: Choose **User scope** (global) or **Project scope** (current directory).
-2.  **Item Type**: Choose what to sync (`skills`, `agents`, `rules`, `codex-agents`, `codex-notifiers`, `templates`, or `settings`).
+2.  **Item Type**: Choose what to sync (`skills`, `agents`, `rules`, `codex-agents`, `notifiers`, `templates`, or `settings`).
 
 ### 4. Template Builder (Special Case)
 
-If you select `templates`, `claude-sync` automatically merges:
-- `templates/common.md` (shared instructions)
-- `templates/<platform>.md` (platform-specific instructions)
+If `templates/modules/` exists, selecting `templates` presents each module's
+description and lets you assemble the desired policy. Each `module.md` contains
+YAML metadata (`id`, `description`, `default`, `order`) followed by its shared
+system prompt. Optional `claude.md`, `codex.md`, `gemini.md`, and `opencode.md`
+files in the same module directory are automatic platform overlays.
 
-It then writes the merged file to the correct target (e.g., `CLAUDE.md`, `GEMINI.md`, or `AGENTS.md`).
+Selections are saved to `~/.config/claude-sync/policy.toml` for user scope or
+`./.claude-sync/policy.toml` for project scope. User scope builds each platform's
+instruction file from the shared prompt plus its overlay. Project scope uses
+only shared prompts: `AGENTS.md` is canonical, while `CLAUDE.md` is a regular
+file containing only `@AGENTS.md` when Claude is selected.
 
-**Cross-Platform Compatibility (Project Scope):**
-In Project Scope, if only one instruction file is generated, `claude-sync` automatically creates symlinks for the others (e.g., `AGENTS.md -> CLAUDE.md`) so all tools can see the same rules.
+Existing modular sources without a manifest are left untouched by `--status`
+and `--refresh`; run the interactive template flow once to create the manifest.
+Sources without `templates/modules/` continue to use the legacy
+`templates/common.md` + `templates/<platform>.md` builder.
 
 ### 5. Tree Selection & Sync
 
-For `skills`, `agents`, `rules`, `codex-agents`, and `codex-notifiers`, use the interactive TUI to pick items. The tool will then:
+For `skills`, `agents`, `rules`, `codex-agents`, and `notifiers`, use the interactive TUI to pick items. The tool will then:
 - Create symlinks in the target directories.
 - Use absolute paths in output for clear visibility.
 
@@ -171,17 +182,22 @@ every `[table]` section (per-project trust, hook-trust hashes, TUI counters) is
 preserved byte-for-byte — only the file's pre-table preamble is rewritten.
 Opencode and Antigravity are skipped.
 
-## Codex Notifiers
+Two optional companion files extend the base fragments without owning unrelated
+settings: `settings/claude-hooks.json` additively appends hook groups by event,
+and `settings/codex.unset` lists bare or dotted settings to remove from the live
+Codex config (for example, `features.fast_mode`).
 
-Executable files under `codex-notifiers/` can be selected for Codex and are
+## Completion Notifiers
+
+Executable files under `notifiers/` can be selected for Claude and Codex and are
 linked into `~/.local/bin/`. The destination is user-global even when project
 scope is selected. Existing commands not owned by claude-sync are never
-overwritten. Point Codex at an installed command through the top-level settings
-fragment, for example:
+overwritten. Point each platform at the installed command through its settings
+source. A Codex fragment can use:
 
 ```toml
 notify = []
-hooks.Stop = [{ hooks = [{ type = "command", command = "$HOME/.local/bin/codex-notify", timeout = 10 }] }]
+hooks.Stop = [{ hooks = [{ type = "command", command = "$HOME/.local/bin/agent-notify codex", timeout = 10 }] }]
 ```
 
 The root `Stop` hook runs after the main Codex turn, while omitting
@@ -191,7 +207,11 @@ Codex asks for one-time trust for a new hook definition; approve it through
 
 The example uses the user-global executable's absolute `$HOME` path. Subsequent
 `claude-sync --refresh` runs repair an existing notifier link and reapply the
-settings fragment without adding a notifier that was never selected.
+settings fragment without adding a notifier that was never selected. During the
+rename migration, only the exact legacy `codex-notify` symlink previously owned
+by claude-sync is removed; real commands and foreign symlinks are preserved.
+Credential files are intentionally not moved between platform-specific and
+shared configuration directories.
 
 **Adding a plugin.** Install it the native way (Claude Code's `/plugin`), which
 writes `enabledPlugins` in the live file. Because the fragment *owns* that key,

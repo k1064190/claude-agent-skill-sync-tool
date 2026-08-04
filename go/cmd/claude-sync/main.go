@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,6 +20,105 @@ import (
 	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/ui"
 	"github.com/k1064190/claude-agent-skill-sync-tool/go/internal/yaml"
 )
+
+func containsPlatform(platforms []config.Platform, target config.Platform) bool {
+	for _, platform := range platforms {
+		if platform == target {
+			return true
+		}
+	}
+	return false
+}
+
+// writePolicyRegularFile updates one generated policy file. Interactive builds
+// may create files and replace an exact old policy compatibility symlink; refresh
+// only updates regular files that already exist.
+func writePolicyRegularFile(path string, content []byte, create bool, replacePolicyAlias bool) (bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		if !create {
+			return false, nil
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return false, err
+		}
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if !create || !replacePolicyAlias {
+			return false, fmt.Errorf("refusing to replace symlink %s", path)
+		}
+		target, readErr := os.Readlink(path)
+		knownAlias := target == "AGENTS.md" || target == "CLAUDE.md" || target == "GEMINI.md"
+		if readErr != nil || !knownAlias {
+			return false, fmt.Errorf("refusing to replace unowned symlink %s", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return false, err
+		}
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("refusing to replace non-regular policy path %s", path)
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(current, content) {
+		return false, nil
+	}
+	if len(current) > 0 {
+		if err := os.WriteFile(path+".bak", current, info.Mode().Perm()); err != nil {
+			return false, err
+		}
+	}
+	if err := os.WriteFile(path, content, info.Mode().Perm()); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// writeProjectPolicyOutputs writes the common project policy to canonical
+// AGENTS.md and regular reference files for platforms that need another name.
+func writeProjectPolicyOutputs(root string, platforms []config.Platform, content string, create bool) (int, error) {
+	changed := 0
+	wrote, err := writePolicyRegularFile(filepath.Join(root, "AGENTS.md"), []byte(content), create, true)
+	if err != nil {
+		return changed, err
+	}
+	if wrote {
+		changed++
+	}
+	for _, target := range []struct {
+		platform config.Platform
+		name     string
+	}{
+		{config.PlatformClaude, "CLAUDE.md"},
+		{config.PlatformAntigravity, "GEMINI.md"},
+	} {
+		if !containsPlatform(platforms, target.platform) {
+			continue
+		}
+		wrote, err := writePolicyRegularFile(filepath.Join(root, target.name), []byte("@AGENTS.md\n"), create, true)
+		if err != nil {
+			return changed, err
+		}
+		if wrote {
+			changed++
+		}
+	}
+	return changed, nil
+}
 
 // --- Skill discovery (leaf directory detection) ---
 
@@ -122,9 +222,9 @@ func collectCodexAgentFiles(srcDir string) ([]string, error) {
 	return collectFilesBySuffix(srcDir, ".toml")
 }
 
-// collectCodexNotifierFiles returns executable regular files that Codex can
-// invoke through its top-level `notify` setting.
-func collectCodexNotifierFiles(srcDir string) ([]string, error) {
+// collectNotifierFiles returns executable regular files that agents can invoke
+// through their completion-hook settings.
+func collectNotifierFiles(srcDir string) ([]string, error) {
 	candidates, err := collectFilesBySuffix(srcDir, "")
 	if err != nil {
 		return nil, err
@@ -256,11 +356,55 @@ func templateState(content, destPath string) string {
 	return "stale"
 }
 
+func modularPolicyManifest(scope config.Scope) (intsync.PolicyManifest, string, bool, error) {
+	path, err := config.PolicyManifestPath(scope)
+	if err != nil {
+		return intsync.PolicyManifest{}, "", false, err
+	}
+	manifest, exists, err := intsync.ReadPolicyManifest(path)
+	return manifest, path, exists, err
+}
+
+// buildModularPolicyOutputs renders one shared selection. User scope appends
+// per-platform overlays; project scope writes one common canonical AGENTS.md.
+func buildModularPolicyOutputs(srcDir string, scope config.Scope, platforms []config.Platform, manifest intsync.PolicyManifest, create bool) (int, error) {
+	modules, err := intsync.LoadPolicyModules(srcDir)
+	if err != nil {
+		return 0, err
+	}
+	if scope == config.ScopeProject {
+		content, err := intsync.BuildPolicyContent(modules, manifest.Modules, config.PlatformCodex, false)
+		if err != nil {
+			return 0, err
+		}
+		root := config.PlatformDestDir(config.PlatformCodex, scope, "templates")
+		return writeProjectPolicyOutputs(root, platforms, content, create)
+	}
+
+	changed := 0
+	for _, platform := range platforms {
+		content, err := intsync.BuildPolicyContent(modules, manifest.Modules, platform, true)
+		if err != nil {
+			return changed, err
+		}
+		target := filepath.Join(config.PlatformDestDir(platform, scope, "templates"), intsync.TemplateTargetName(platform))
+		wrote, err := writePolicyRegularFile(target, []byte(content), create, false)
+		if err != nil {
+			return changed, err
+		}
+		if wrote {
+			fmt.Printf("  built: %s\n", target)
+			changed++
+		}
+	}
+	return changed, nil
+}
+
 // settingsState reports whether a platform's live settings file already has the
 // fragment applied: "applied", "pending" (the merge would change it), "missing"
 // (no fragment declared), or "error" (unreadable / malformed JSON).
 func settingsState(srcDir, destPath string, platform config.Platform) string {
-	fragment, err := os.ReadFile(filepath.Join(srcDir, intsync.SettingsSourceFile(platform)))
+	_, err := os.Stat(filepath.Join(srcDir, intsync.SettingsSourceFile(platform)))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "missing" // no fragment declared for this platform
@@ -271,7 +415,7 @@ func settingsState(srcDir, destPath string, platform config.Platform) string {
 	if err != nil && !os.IsNotExist(err) {
 		return "error"
 	}
-	_, changed, err := intsync.MergeSettingsForPlatform(platform, live, fragment)
+	_, changed, err := intsync.MergeSettingsFromSource(srcDir, platform, live)
 	if err != nil {
 		return "error"
 	}
@@ -334,6 +478,42 @@ func runStatus(cfg *config.Config, scope config.Scope) {
 		fmt.Printf("\n== %s ==\n", itemType)
 
 		if itemType == "templates" {
+			if intsync.PolicyModulesExist(srcDir) {
+				manifest, manifestPath, exists, err := modularPolicyManifest(scope)
+				if err != nil {
+					fmt.Printf("  Shared       error    %v\n", err)
+					continue
+				}
+				if !exists {
+					fmt.Printf("  Shared       unconfigured %s\n", manifestPath)
+					continue
+				}
+				modules, err := intsync.LoadPolicyModules(srcDir)
+				if err != nil {
+					fmt.Printf("  Shared       error    %v\n", err)
+					continue
+				}
+				if scope == config.ScopeProject {
+					content, buildErr := intsync.BuildPolicyContent(modules, manifest.Modules, config.PlatformCodex, false)
+					if buildErr != nil {
+						fmt.Printf("  Shared       error    %v\n", buildErr)
+						continue
+					}
+					destPath := filepath.Join(config.PlatformDestDir(config.PlatformCodex, scope, itemType), "AGENTS.md")
+					fmt.Printf("  %-12s %-8s %s\n", "Shared", templateState(content, destPath), destPath)
+					continue
+				}
+				for _, p := range platforms {
+					content, buildErr := intsync.BuildPolicyContent(modules, manifest.Modules, p, true)
+					if buildErr != nil {
+						fmt.Printf("  %-12s error    %v\n", p, buildErr)
+						continue
+					}
+					destPath := filepath.Join(config.PlatformDestDir(p, scope, itemType), intsync.TemplateTargetName(p))
+					fmt.Printf("  %-12s %-8s %s\n", p, templateState(content, destPath), destPath)
+				}
+				continue
+			}
 			for _, p := range platforms {
 				content, target, err := intsync.BuildTemplateContent(srcDir, p)
 				if err != nil || content == "" {
@@ -380,8 +560,24 @@ func runStatus(cfg *config.Config, scope config.Scope) {
 //   - backs up the existing file to <path>.bak before overwriting, and aborts
 //     that rebuild if the backup cannot be written.
 //
-// Returns the number of instruction files rebuilt.
-func refreshTemplates(srcDir string, scope config.Scope, platforms []config.Platform) int {
+// Returns the number of instruction files rebuilt and any modular-policy error.
+func refreshTemplates(srcDir string, scope config.Scope, platforms []config.Platform) (int, error) {
+	if intsync.PolicyModulesExist(srcDir) {
+		manifest, manifestPath, exists, err := modularPolicyManifest(scope)
+		if err != nil {
+			return 0, fmt.Errorf("policy manifest: %w", err)
+		}
+		if !exists {
+			fmt.Printf("  skipped modular templates (no manifest: %s)\n", manifestPath)
+			return 0, nil
+		}
+		changed, err := buildModularPolicyOutputs(srcDir, scope, platforms, manifest, false)
+		if err != nil {
+			return changed, fmt.Errorf("modular template: %w", err)
+		}
+		return changed, nil
+	}
+
 	// Group platforms by destination path, tracking the distinct built
 	// contents that map there and one platform able to produce each path.
 	type group struct {
@@ -453,7 +649,7 @@ func refreshTemplates(srcDir string, scope config.Scope, platforms []config.Plat
 		}
 		rebuilt += res.Built
 	}
-	return rebuilt
+	return rebuilt, nil
 }
 
 // linkedRepos scans the given source directories for symlinks and resolves
@@ -582,6 +778,35 @@ func clobberSafeNotifierSelection(selected map[string]bool, srcDir, destDir stri
 	return safe
 }
 
+// migrateLegacyNotifierLink removes only the exact codex-notify symlink created
+// by an older claude-sync source layout. User files and foreign symlinks are
+// never touched.
+func migrateLegacyNotifierLink(sourceRoot, destDir string) (bool, error) {
+	dest := filepath.Join(destDir, "codex-notify")
+	info, err := os.Lstat(dest)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return false, nil
+	}
+	target, err := os.Readlink(dest)
+	if err != nil {
+		return false, err
+	}
+	if target != filepath.Join(sourceRoot, "codex-notifiers", "codex-notify") {
+		return false, nil
+	}
+	if err := os.Remove(dest); err != nil {
+		return false, err
+	}
+	fmt.Printf("  removed legacy notifier link: %s\n", dest)
+	return true, nil
+}
+
 // removeDanglingLinks deletes symlinks under destDir that point into srcDir but
 // whose target no longer resolves (the source item was deleted or renamed).
 // These are the broken links --status reports; refresh cleans them so the two
@@ -637,7 +862,12 @@ func runRefresh(cfg *config.Config, scope config.Scope) bool {
 		}
 
 		if itemType == "templates" {
-			totalRebuilt += refreshTemplates(srcDir, scope, platforms)
+			rebuilt, err := refreshTemplates(srcDir, scope, platforms)
+			totalRebuilt += rebuilt
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  template refresh error: %v\n", err)
+				failed++
+			}
 			continue
 		}
 
@@ -691,8 +921,8 @@ func runRefresh(cfg *config.Config, scope config.Scope) bool {
 			allItems, err = collectSkills(srcDir)
 		case "codex-agents":
 			allItems, err = collectCodexAgentFiles(srcDir)
-		case "codex-notifiers":
-			allItems, err = collectCodexNotifierFiles(srcDir)
+		case "notifiers":
+			allItems, err = collectNotifierFiles(srcDir)
 		default:
 			allItems, err = collectMdFiles(srcDir)
 		}
@@ -705,8 +935,21 @@ func runRefresh(cfg *config.Config, scope config.Scope) bool {
 			if destDir == "" {
 				continue
 			}
+			legacyMigrated := false
+			if itemType == "notifiers" {
+				legacyMigrated, err = migrateLegacyNotifierLink(cfg.SourceRoot, destDir)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  notifier migration error [%s]: %v\n", p, err)
+					failed++
+					continue
+				}
+			}
 			totalRemoved += removeDanglingLinks(srcDir, destDir)
 			existing := config.ExistingSymlinks(allItems, srcDir, destDir)
+			if legacyMigrated {
+				existing["agent-notify"] = true
+				totalRemoved++
+			}
 			if len(existing) == 0 {
 				continue
 			}
@@ -917,6 +1160,82 @@ func main() {
 
 	// --- Templates Builder Bypass ---
 	if itemType == "templates" {
+		if intsync.PolicyModulesExist(srcDir) {
+			modules, err := intsync.LoadPolicyModules(srcDir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Policy module error: %v\n", err)
+				os.Exit(1)
+			}
+			manifest, manifestPath, exists, err := modularPolicyManifest(scope)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Policy manifest error: %v\n", err)
+				os.Exit(1)
+			}
+			selectedIDs := intsync.DefaultPolicyModuleIDs(modules)
+			if exists {
+				selectedIDs = manifest.Modules
+			}
+			initial := make(map[string]bool, len(selectedIDs))
+			for _, id := range selectedIDs {
+				initial[id] = true
+			}
+			items := make([]string, 0, len(modules))
+			descriptions := make(map[string]string, len(modules))
+			for _, module := range modules {
+				items = append(items, module.ID)
+				descriptions[module.ID] = module.Description
+			}
+			descFn := func(id string) string { return descriptions[id] }
+			model := tree.NewModel(items, descFn, initial)
+			program := tea.NewProgram(model, tea.WithAltScreen())
+			finalModel, err := program.Run()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+				os.Exit(1)
+			}
+			result, ok := finalModel.(tree.Model)
+			if !ok {
+				fmt.Fprintln(os.Stderr, "Internal error: unexpected model type")
+				os.Exit(1)
+			}
+			if !result.Confirmed {
+				fmt.Println("Selection cancelled.")
+				os.Exit(0)
+			}
+			fmt.Printf("\nSelected %d policy modules:\n", len(result.SelectedPaths))
+			for _, id := range result.SelectedPaths {
+				fmt.Printf("  - %s\n", id)
+			}
+
+			tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Cannot open /dev/tty: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Fprint(tty, "Proceed with policy build? [y/N]: ")
+			scanner := bufio.NewScanner(tty)
+			scanner.Scan()
+			answer := strings.TrimSpace(scanner.Text())
+			tty.Close()
+			if answer != "y" && answer != "Y" {
+				fmt.Println("Aborted.")
+				os.Exit(0)
+			}
+
+			manifest = intsync.PolicyManifest{Version: 1, Modules: result.SelectedPaths}
+			if err := intsync.WritePolicyManifest(manifestPath, manifest); err != nil {
+				fmt.Fprintf(os.Stderr, "Policy manifest write error: %v\n", err)
+				os.Exit(1)
+			}
+			built, err := buildModularPolicyOutputs(srcDir, scope, platforms, manifest, true)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Policy build error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("\nDone. Saved %s and built %d policy file(s).\n", manifestPath, built)
+			os.Exit(0)
+		}
+
 		fmt.Printf("\nBuilding templates for selected platforms...\n")
 
 		totalBuilt := 0
@@ -984,8 +1303,8 @@ func main() {
 		allItems, err = collectSkills(srcDir)
 	case "codex-agents":
 		allItems, err = collectCodexAgentFiles(srcDir)
-	case "codex-notifiers":
-		allItems, err = collectCodexNotifierFiles(srcDir)
+	case "notifiers":
+		allItems, err = collectNotifierFiles(srcDir)
 	default:
 		allItems, err = collectMdFiles(srcDir)
 	}
@@ -1098,7 +1417,11 @@ func main() {
 
 		fmt.Printf("\nSyncing to %s...\n", p)
 		syncSelection := selectedSet
-		if itemType == "codex-notifiers" {
+		if itemType == "notifiers" {
+			if _, err := migrateLegacyNotifierLink(cfg.SourceRoot, destDir); err != nil {
+				fmt.Fprintf(os.Stderr, "Notifier migration error for %s: %v\n", p, err)
+				continue
+			}
 			syncSelection = clobberSafeNotifierSelection(selectedSet, srcDir, destDir)
 		}
 		syncResult, err := intsync.SyncItems(allItems, syncSelection, srcDir, destDir)

@@ -519,12 +519,12 @@ func ApplySettings(srcDir, destDir string, platform config.Platform) (Result, er
 		return res, nil // platform has no managed settings file
 	}
 
-	fragment, err := os.ReadFile(filepath.Join(srcDir, srcName))
+	_, err := os.Stat(filepath.Join(srcDir, srcName))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return res, nil // nothing declared for this platform
 		}
-		return res, fmt.Errorf("read settings fragment: %w", err)
+		return res, fmt.Errorf("stat settings fragment: %w", err)
 	}
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -546,7 +546,7 @@ func ApplySettings(srcDir, destDir string, platform config.Platform) (Result, er
 			return res, fmt.Errorf("read %s: %w", destPath, err)
 		}
 
-		merged, changed, err := MergeSettingsForPlatform(platform, live, fragment)
+		merged, changed, err := MergeSettingsFromSource(srcDir, platform, live)
 		if err != nil {
 			return res, fmt.Errorf("%s: %w", destPath, err)
 		}
