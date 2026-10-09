@@ -321,9 +321,14 @@ func DestDir(scope Scope, itemType string) string {
 //
 //	existing (map[string]bool): Set of relative paths with active symlinks.
 func ExistingSymlinks(allItems []string, srcDir, destDir string) map[string]bool {
+	return ExistingSymlinksAs(allItems, srcDir, destDir, func(item string) string { return item })
+}
+
+// ExistingSymlinksAs is ExistingSymlinks for items linked at destDir/destName(item).
+func ExistingSymlinksAs(allItems []string, srcDir, destDir string, destName func(string) string) map[string]bool {
 	existing := make(map[string]bool)
 	for _, item := range allItems {
-		dest := filepath.Join(destDir, item)
+		dest := filepath.Join(destDir, destName(item))
 		target, err := os.Readlink(dest)
 		if err != nil {
 			continue

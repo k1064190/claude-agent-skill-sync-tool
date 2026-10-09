@@ -134,3 +134,23 @@ func PlatformDestDir(platform Platform, scope Scope, itemType string) string {
 	}
 	return filepath.Clean(dir)
 }
+
+// DestItemName returns the mapper from a source-relative item path to its path
+// under PlatformDestDir. Claude Code only discovers skills one level deep
+// (<dir>/skills/<name>/SKILL.md), so nested Claude skills are linked by
+// basename; every other platform and item type keeps the relative path.
+//
+// Args:
+//
+//	platform (Platform): Target platform.
+//	itemType (string):   Item type (e.g. "skills").
+//
+// Returns:
+//
+//	destName (func(string) string): Destination path mapper.
+func DestItemName(platform Platform, itemType string) func(string) string {
+	if platform == PlatformClaude && itemType == "skills" {
+		return filepath.Base
+	}
+	return func(item string) string { return item }
+}
