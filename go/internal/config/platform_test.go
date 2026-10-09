@@ -81,3 +81,23 @@ func TestPlatformDestDirCodexAgentsRejectsOtherPlatforms(t *testing.T) {
 		}
 	}
 }
+
+func TestDestItemName(t *testing.T) {
+	nested := filepath.Join("group", "skill")
+	if got := DestItemName(PlatformClaude, "skills")(nested); got != "skill" {
+		t.Errorf("Claude skills: got %q; want %q", got, "skill")
+	}
+	for _, c := range []struct {
+		platform Platform
+		itemType string
+	}{
+		{PlatformClaude, "agents"},
+		{PlatformCodex, "skills"},
+		{PlatformAntigravity, "skills"},
+		{PlatformOpencode, "skills"},
+	} {
+		if got := DestItemName(c.platform, c.itemType)(nested); got != nested {
+			t.Errorf("%s %s: got %q; want %q", c.platform, c.itemType, got, nested)
+		}
+	}
+}

@@ -842,6 +842,19 @@ func removeDanglingLinks(srcDir, destDir string) int {
 	return removed
 }
 
+// prepareDestLinks resolves how items are named under destDir for platform p,
+// rejects destination name collisions, and removes legacy links left at the
+// old nested path. It returns the name mapper and the items whose legacy link
+// was removed, which the caller must relink.
+func prepareDestLinks(p config.Platform, itemType string, allItems []string, srcDir, destDir string) (func(string) string, map[string]bool, error) {
+	destName := config.DestItemName(p, itemType)
+	if err := intsync.CheckDestNameCollisions(allItems, destName); err != nil {
+		return nil, nil, err
+	}
+	migrated, err := intsync.MigrateNestedLinks(allItems, srcDir, destDir, destName)
+	return destName, migrated, err
+}
+
 // runRefresh re-applies the current sync state without prompting: it re-links
 // items that are already linked (repairing dangling links), rebuilds
 // instruction files that already exist (repairing template drift), and injects
@@ -945,7 +958,16 @@ func runRefresh(cfg *config.Config, scope config.Scope) bool {
 				}
 			}
 			totalRemoved += removeDanglingLinks(srcDir, destDir)
-			existing := config.ExistingSymlinks(allItems, srcDir, destDir)
+			destName, migrated, err := prepareDestLinks(p, itemType, allItems, srcDir, destDir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  link layout error [%s/%s]: %v\n", p, itemType, err)
+				failed++
+				continue
+			}
+			existing := config.ExistingSymlinksAs(allItems, srcDir, destDir, destName)
+			for item := range migrated {
+				existing[item] = true
+			}
 			if legacyMigrated {
 				existing["agent-notify"] = true
 				totalRemoved++
@@ -953,7 +975,7 @@ func runRefresh(cfg *config.Config, scope config.Scope) bool {
 			if len(existing) == 0 {
 				continue
 			}
-			res, err := intsync.SyncItems(allItems, existing, srcDir, destDir)
+			res, err := intsync.SyncItemsAs(allItems, existing, srcDir, destDir, destName)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  relink error [%s/%s]: %v\n", p, itemType, err)
 				failed++
@@ -1325,7 +1347,12 @@ func main() {
 		if destDir == "" {
 			continue
 		}
-		existing := config.ExistingSymlinks(allItems, srcDir, destDir)
+		// Count links at both the platform's current layout and the legacy
+		// nested path, so a pending migration keeps the prior selection.
+		existing := config.ExistingSymlinksAs(allItems, srcDir, destDir, config.DestItemName(p, itemType))
+		for k, v := range config.ExistingSymlinks(allItems, srcDir, destDir) {
+			existing[k] = existing[k] || v
+		}
 		for k, v := range existing {
 			if v {
 				existingUnion[k] = true
@@ -1424,7 +1451,12 @@ func main() {
 			}
 			syncSelection = clobberSafeNotifierSelection(selectedSet, srcDir, destDir)
 		}
-		syncResult, err := intsync.SyncItems(allItems, syncSelection, srcDir, destDir)
+		destName, _, err := prepareDestLinks(p, itemType, allItems, srcDir, destDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Link layout error for %s: %v\n", p, err)
+			continue
+		}
+		syncResult, err := intsync.SyncItemsAs(allItems, syncSelection, srcDir, destDir, destName)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Sync error for %s: %v\n", p, err)
 			// Continue to next platform

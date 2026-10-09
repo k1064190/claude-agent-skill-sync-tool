@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Result holds the outcome of a SyncItems or BuildTemplate call.
@@ -44,11 +45,22 @@ type Result struct {
 //	result (Result): Count of linked and removed items.
 //	err    (error):  First error encountered, or nil on success.
 func SyncItems(allItems []string, selected map[string]bool, srcBase, destBase string) (Result, error) {
+	return SyncItemsAs(allItems, selected, srcBase, destBase, IdentityDestName)
+}
+
+// IdentityDestName keeps an item's source-relative path as its destination path.
+func IdentityDestName(item string) string { return item }
+
+// SyncItemsAs is SyncItems with a destination name mapper: the dest path is
+// destBase/destName(item) instead of destBase/item. Platforms that only
+// discover one directory level (Claude skills) map nested items to their
+// basename.
+func SyncItemsAs(allItems []string, selected map[string]bool, srcBase, destBase string, destName func(string) string) (Result, error) {
 	var res Result
 
 	for _, item := range allItems {
 		src := filepath.Join(srcBase, item)
-		dest := filepath.Join(destBase, item)
+		dest := filepath.Join(destBase, destName(item))
 
 		if selected[item] {
 			// Ensure parent directory exists.
@@ -94,4 +106,70 @@ func SyncItems(allItems []string, selected map[string]bool, srcBase, destBase st
 	}
 
 	return res, nil
+}
+
+// CheckDestNameCollisions reports an error when two items map to the same
+// destination name, which would make one link silently overwrite the other.
+//
+// Args:
+//
+//	allItems ([]string):            Relative item paths discovered in the source tree.
+//	destName (func(string) string): Destination name mapper.
+//
+// Returns:
+//
+//	err (error): Collision description, or nil when every name is unique.
+func CheckDestNameCollisions(allItems []string, destName func(string) string) error {
+	seen := make(map[string]string, len(allItems))
+	for _, item := range allItems {
+		name := destName(item)
+		if prev, ok := seen[name]; ok {
+			return fmt.Errorf("items %q and %q both map to destination %q", prev, item, name)
+		}
+		seen[name] = item
+	}
+	return nil
+}
+
+// MigrateNestedLinks removes legacy links created at destBase/item for items
+// whose destination name now differs (destName(item) != item), and prunes the
+// directories left empty under destBase. Only symlinks pointing exactly at
+// srcBase/item are touched.
+//
+// Args:
+//
+//	allItems ([]string):            Relative item paths discovered in the source tree.
+//	srcBase  (string):              Absolute path to the source directory.
+//	destBase (string):              Absolute path to the destination directory.
+//	destName (func(string) string): Destination name mapper.
+//
+// Returns:
+//
+//	migrated (map[string]bool): Items whose legacy link was removed, so callers can relink them.
+//	err      (error):           First removal error, or nil.
+func MigrateNestedLinks(allItems []string, srcBase, destBase string, destName func(string) string) (map[string]bool, error) {
+	migrated := make(map[string]bool)
+	for _, item := range allItems {
+		if destName(item) == item {
+			continue
+		}
+		legacy := filepath.Join(destBase, item)
+		target, err := os.Readlink(legacy)
+		if err != nil || target != filepath.Join(srcBase, item) {
+			continue
+		}
+		if err := os.Remove(legacy); err != nil {
+			return migrated, fmt.Errorf("remove legacy %s: %w", legacy, err)
+		}
+		fmt.Printf("  migrated: %s\n", legacy)
+		migrated[item] = true
+		// Prune now-empty parents up to (but excluding) destBase. os.Remove
+		// fails on a non-empty dir, which stops the walk.
+		for dir := filepath.Dir(legacy); dir != destBase && strings.HasPrefix(dir, destBase+string(os.PathSeparator)); dir = filepath.Dir(dir) {
+			if os.Remove(dir) != nil {
+				break
+			}
+		}
+	}
+	return migrated, nil
 }
